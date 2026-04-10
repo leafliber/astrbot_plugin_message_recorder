@@ -103,7 +103,7 @@ class MessageRecorder(Star):
 
     # ========== 消息监听 ==========
 
-    @filter.EventMessageType.ALL
+    @filter.event_message_type(filter.EventMessageType.ALL)
     async def on_message(self, event: AstrMessageEvent):
         """
         监听所有消息事件并保存到数据库
