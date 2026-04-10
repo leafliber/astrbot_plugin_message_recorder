@@ -1,0 +1,19 @@
+name: astrbot_plugin_message_recorder
+desc: 多平台消息记录器，支持将消息保存到 SQLite 数据库，并提供查询接口
+version: 1.0.0
+author: cassia
+repo: https://github.com/cassia/astrbot_plugin_message_recorder
+display_name: 消息记录器
+support_platforms:
+  - telegram
+  - discord
+  - qq_official
+  - qq_private
+  - wechat
+  - generic
+astrbot_version: ">=4.16,<5"
+keywords:
+  - 消息记录
+  - 数据库
+  - SQLite
+  - 消息查询

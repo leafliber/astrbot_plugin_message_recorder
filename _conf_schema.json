@@ -1,0 +1,32 @@
+{
+  "max_records": {
+    "type": "int",
+    "description": "最大消息记录数，超过时自动清理最旧的记录",
+    "default": 100000,
+    "hint": "设置为 0 表示不限制记录数量（可能占用大量磁盘空间）"
+  },
+  "retention_days": {
+    "type": "int",
+    "description": "消息保留天数",
+    "default": 30,
+    "hint": "超过此天数的消息将被自动清理，设置为 0 表示永久保留"
+  },
+  "save_message_chain": {
+    "type": "bool",
+    "description": "是否保存完整消息链（包含图片、表情等消息段）",
+    "default": true,
+    "hint": "关闭后只保存纯文本消息，可节省存储空间"
+  },
+  "save_raw_message": {
+    "type": "bool",
+    "description": "是否保存原始消息对象（平台原始数据）",
+    "default": false,
+    "hint": "开启后会保存平台的原始消息数据，便于调试但会占用更多空间"
+  },
+  "cleanup_interval_hours": {
+    "type": "int",
+    "description": "自动清理过期消息的间隔（小时）",
+    "default": 24,
+    "hint": "每隔指定小时数自动清理过期和超量记录"
+  }
+}
