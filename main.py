@@ -190,9 +190,12 @@ class MessageRecorder(Star):
 
     # ========== 管理指令 ==========
 
-    _cmd_group = filter.command_group("msg_record")
+    @filter.command_group("msg_record")
+    def msg_record():
+        """消息记录指令组"""
+        pass
 
-    @_cmd_group.command("stats")
+    @msg_record.command("stats")
     async def cmd_stats(self, event: AstrMessageEvent):
         """查看消息统计信息"""
         if not self._api:
@@ -229,7 +232,7 @@ class MessageRecorder(Star):
 
         yield event.plain_result("\n".join(lines))
 
-    @_cmd_group.command("cleanup")
+    @msg_record.command("cleanup")
     async def cmd_cleanup(self, event: AstrMessageEvent):
         """手动触发清理"""
         if not self._api:
@@ -241,7 +244,7 @@ class MessageRecorder(Star):
 
         yield event.plain_result(f"✅ 已清理 {total} 条消息记录")
 
-    @_cmd_group.command("query")
+    @msg_record.command("query")
     async def cmd_query(self, event: AstrMessageEvent, sender: str = "", limit: int = 10):
         """查询消息记录 (sender: 发送者ID, limit: 数量)"""
         if not self._api:
@@ -271,7 +274,7 @@ class MessageRecorder(Star):
 
         yield event.plain_result("\n".join(lines))
 
-    @_cmd_group.command("search")
+    @msg_record.command("search")
     async def cmd_search(self, event: AstrMessageEvent, keyword: str, limit: int = 10):
         """搜索消息内容 (keyword: 关键词, limit: 数量)"""
         if not self._api:
@@ -298,7 +301,7 @@ class MessageRecorder(Star):
 
         yield event.plain_result("\n".join(lines))
 
-    @_cmd_group.command("help")
+    @msg_record.command("help")
     async def cmd_help(self, event: AstrMessageEvent):
         """查看帮助信息"""
         help_text = """📖 消息记录器帮助
@@ -321,7 +324,7 @@ class MessageRecorder(Star):
 其他插件可通过 get_api() 方法调用查询接口。"""
         yield event.plain_result(help_text)
 
-    @_cmd_group.command("today")
+    @msg_record.command("today")
     async def cmd_today(self, event: AstrMessageEvent, limit: int = 20):
         """查看今天的消息"""
         if not self._api:
@@ -350,7 +353,7 @@ class MessageRecorder(Star):
 
         yield event.plain_result("\n".join(lines))
 
-    @_cmd_group.command("yesterday")
+    @msg_record.command("yesterday")
     async def cmd_yesterday(self, event: AstrMessageEvent, limit: int = 20):
         """查看昨天的消息"""
         if not self._api:
@@ -379,7 +382,7 @@ class MessageRecorder(Star):
 
         yield event.plain_result("\n".join(lines))
 
-    @_cmd_group.command("history")
+    @msg_record.command("history")
     async def cmd_history(self, event: AstrMessageEvent, time_range: str = "week", limit: int = 30):
         """按时间范围查询消息"""
         if not self._api:
