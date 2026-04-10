@@ -167,12 +167,10 @@ class MessageRecorder(Star):
 
     def _get_platform_name(self, event: AstrMessageEvent) -> str:
         """获取平台名称"""
-        platform_obj = event.session.platform
-        if hasattr(platform_obj, "platform_name"):
-            return platform_obj.platform_name
-        if hasattr(platform_obj, "name"):
-            return platform_obj.name
-        return str(platform_obj.__class__.__name__).lower()
+        try:
+            return event.get_platform_name() or "unknown"
+        except Exception:
+            return "unknown"
 
     def _serialize_component(self, component) -> dict:
         """序列化消息组件"""
