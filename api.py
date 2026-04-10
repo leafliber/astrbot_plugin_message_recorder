@@ -2,6 +2,8 @@
 
 from typing import Optional, List, Dict
 
+from astrbot.api import logger
+
 from .database import Database
 from .models import MessageRecord, QueryFilter, MessageStats
 
@@ -70,10 +72,10 @@ class MessageRecorderAPI:
 
         Examples:
             # 简单查询
-            messages = await api.query(limit=10)
+            messages = await mr_api.query(limit=10)
 
             # 多条件组合
-            messages = await api.query(
+            messages = await mr_api.query(
                 platform="telegram",
                 group_id="123456",
                 time="today",
@@ -81,13 +83,13 @@ class MessageRecorderAPI:
             )
 
             # 多发送者查询
-            messages = await api.query(
+            messages = await mr_api.query(
                 sender_ids=["user1", "user2", "user3"],
                 time="last7d"
             )
 
             # 分页查询
-            messages = await api.query(
+            messages = await mr_api.query(
                 group_id="123456",
                 limit=20,
                 offset=40  # 第三页
@@ -139,10 +141,10 @@ class MessageRecorderAPI:
 
         Examples:
             # 统计今天的消息
-            count = await api.count(time="today")
+            count = await mr_api.count(time="today")
 
             # 统计某群组某用户的消息
-            count = await api.count(
+            count = await mr_api.count(
                 group_id="123456",
                 sender_id="user1",
                 time="month"
@@ -176,8 +178,8 @@ class MessageRecorderAPI:
             **kwargs: 其他筛选条件（platform, group_id 等）
 
         Examples:
-            messages = await api.get_today(limit=20)
-            messages = await api.get_today(platform="telegram", limit=50)
+            messages = await mr_api.get_today(limit=20)
+            messages = await mr_api.get_today(platform="telegram", limit=50)
         """
         return await self.query(time="today", limit=limit, **kwargs)
 
@@ -206,7 +208,7 @@ class MessageRecorderAPI:
             **kwargs: 其他筛选条件
 
         Examples:
-            messages = await api.get_recent(hours=6)  # 最近6小时
+            messages = await mr_api.get_recent(hours=6)  # 最近6小时
         """
         time_str = f"last{hours}h"
         return await self.query(time=time_str, limit=limit, **kwargs)
@@ -226,7 +228,7 @@ class MessageRecorderAPI:
             **kwargs: 其他筛选条件
 
         Examples:
-            messages = await api.get_recent_days(days=30)  # 最近30天
+            messages = await mr_api.get_recent_days(days=30)  # 最近30天
         """
         time_str = f"last{days}d"
         return await self.query(time=time_str, limit=limit, **kwargs)
@@ -241,8 +243,8 @@ class MessageRecorderAPI:
             **kwargs: 其他筛选条件
 
         Examples:
-            messages = await api.search("关键词")
-            messages = await api.search("关键词", group_id="123456", time="week")
+            messages = await mr_api.search("关键词")
+            messages = await mr_api.search("关键词", group_id="123456", time="week")
         """
         return await self.query(keyword=keyword, limit=limit, **kwargs)
 
@@ -256,7 +258,13 @@ class MessageRecorderAPI:
         Returns:
             消息记录，不存在则返回 None
         """
-        return await self.db.get_message_by_id(message_id)
+        logger.debug(f"[MessageRecorder] API调用: get_by_id({message_id})")
+        result = await self.db.get_message_by_id(message_id)
+        if result:
+            logger.debug(f"[MessageRecorder] 找到消息 #{message_id}")
+        else:
+            logger.debug(f"[MessageRecorder] 消息 #{message_id} 不存在")
+        return result
 
     async def get_context(
         self,
@@ -274,13 +282,15 @@ class MessageRecorderAPI:
 
         Returns:
             {"before": [...], "after": [...]}
-
-        Examples:
-            context = await api.get_context(123, before=10, after=10)
-            for msg in context["before"]:
-                print(msg.message_str)
         """
-        return await self.db.get_context_messages(message_id, before, after)
+        logger.debug(
+            f"[MessageRecorder] API调用: get_context(id={message_id}, before={before}, after={after})"
+        )
+        result = await self.db.get_context_messages(message_id, before, after)
+        logger.debug(
+            f"[MessageRecorder] 上下文结果: before={len(result['before'])}条, after={len(result['after'])}条"
+        )
+        return result
 
     async def get_stats(self) -> MessageStats:
         """
@@ -295,4 +305,10 @@ class MessageRecorderAPI:
             - oldest_timestamp: 最早消息时间
             - newest_timestamp: 最新消息时间
         """
-        return await self.db.get_stats()
+        logger.debug("[MessageRecorder] API调用: get_stats()")
+        result = await self.db.get_stats()
+        logger.debug(
+            f"[MessageRecorder] 统计结果: total={result.total_count}, "
+            f"group={result.group_message_count}, private={result.private_message_count}"
+        )
+        return result

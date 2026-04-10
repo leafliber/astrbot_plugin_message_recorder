@@ -109,7 +109,10 @@ class MessageRecorder(Star):
         监听所有消息事件并保存到数据库
         """
         if not self._db:
+            logger.debug("[MessageRecorder] 跳过消息: 数据库未初始化")
             return
+
+        logger.debug("[MessageRecorder] 收到消息事件，开始处理")
 
         try:
             message_obj = event.message_obj
@@ -148,9 +151,15 @@ class MessageRecorder(Star):
 
             # 保存到数据库
             record_id = await self._db.save_message(record)
+
+            # 消息内容摘要（用于调试）
+            content_preview = (event.message_str[:30] + "...") if event.message_str and len(event.message_str) > 30 else (event.message_str or "[非文本]")
+
             logger.debug(
-                f"[MessageRecorder] 已保存消息 #{record_id} "
-                f"来自 {platform}/{record.sender_id}"
+                f"[MessageRecorder] 消息保存成功 #{record_id} | "
+                f"平台: {platform} | 类型: {record.message_type} | "
+                f"发送者: {record.sender_name or record.sender_id} | "
+                f"内容: {content_preview}"
             )
 
         except Exception as e:

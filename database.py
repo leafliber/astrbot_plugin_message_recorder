@@ -78,6 +78,12 @@ class Database:
         """保存消息记录，返回记录 ID"""
         record.created_at = int(time.time() * 1000)
 
+        logger.debug(
+            f"[MessageRecorder] 正在保存消息: "
+            f"platform={record.platform}, sender={record.sender_id}, "
+            f"type={record.message_type}, group={record.group_id or '私聊'}"
+        )
+
         cursor = await self._db.execute("""
             INSERT INTO messages (
                 platform, message_id, session_id, group_id,
@@ -100,7 +106,13 @@ class Database:
             record.created_at,
         ))
         await self._db.commit()
-        return cursor.lastrowid or 0
+        record_id = cursor.lastrowid or 0
+
+        logger.debug(
+            f"[MessageRecorder] 消息已写入数据库, record_id={record_id}"
+        )
+
+        return record_id
 
     def _build_where_clause(self, query_filter: QueryFilter) -> tuple:
         """构建 WHERE 子句和参数"""
@@ -180,6 +192,11 @@ class Database:
         where_clause, params = self._build_where_clause(query_filter)
         order_clause = "timestamp DESC" if query_filter.is_desc_order() else "timestamp ASC"
 
+        logger.debug(
+            f"[MessageRecorder] 执行查询: WHERE {where_clause}, "
+            f"limit={query_filter.limit}, offset={query_filter.offset}, order={order_clause}"
+        )
+
         sql = f"""
             SELECT id, platform, message_id, session_id, group_id,
                    sender_id, sender_name, message_type,
@@ -213,6 +230,8 @@ class Database:
                 created_at=row[12],
             )
             records.append(record)
+
+        logger.debug(f"[MessageRecorder] 查询返回 {len(records)} 条记录")
 
         return records
 
@@ -285,10 +304,16 @@ class Database:
         """统计符合条件的消息数量"""
         where_clause, params = self._build_where_clause(query_filter)
 
+        logger.debug(f"[MessageRecorder] 执行统计: WHERE {where_clause}")
+
         sql = f"SELECT COUNT(*) FROM messages WHERE {where_clause}"
         cursor = await self._db.execute(sql, params)
         result = await cursor.fetchone()
-        return result[0] if result else 0
+        count = result[0] if result else 0
+
+        logger.debug(f"[MessageRecorder] 统计结果: {count} 条")
+
+        return count
 
     async def get_stats(self) -> MessageStats:
         """获取消息统计信息"""
@@ -342,19 +367,31 @@ class Database:
     async def cleanup_by_age(self, retention_days: int) -> int:
         """清理超过保留天数的消息，返回清理数量"""
         if retention_days <= 0:
+            logger.debug("[MessageRecorder] 跳过按时间清理: retention_days=0")
             return 0
 
         cutoff_time = int((time.time() - retention_days * 86400) * 1000)
+        logger.debug(
+            f"[MessageRecorder] 按时间清理: retention_days={retention_days}, "
+            f"cutoff_timestamp={cutoff_time}"
+        )
+
         cursor = await self._db.execute(
             "DELETE FROM messages WHERE timestamp < ?",
             (cutoff_time,)
         )
         await self._db.commit()
-        return cursor.rowcount
+        deleted = cursor.rowcount
+
+        if deleted > 0:
+            logger.debug(f"[MessageRecorder] 按时间清理了 {deleted} 条记录")
+
+        return deleted
 
     async def cleanup_by_limit(self, max_records: int) -> int:
         """清理超出数量限制的旧消息，返回清理数量"""
         if max_records <= 0:
+            logger.debug("[MessageRecorder] 跳过按数量清理: max_records=0")
             return 0
 
         # 获取当前记录数
@@ -362,7 +399,12 @@ class Database:
         result = await cursor.fetchone()
         current_count = result[0] if result else 0
 
+        logger.debug(
+            f"[MessageRecorder] 按数量清理检查: current={current_count}, max={max_records}"
+        )
+
         if current_count <= max_records:
+            logger.debug("[MessageRecorder] 当前记录数未超限，无需清理")
             return 0
 
         # 删除最旧的记录
@@ -373,6 +415,14 @@ class Database:
                 SELECT id FROM messages
                 ORDER BY timestamp ASC
                 LIMIT ?
+            )
+        """, (delete_count,))
+        await self._db.commit()
+        deleted = cursor.rowcount
+
+        logger.debug(f"[MessageRecorder] 按数量清理了 {deleted} 条记录")
+
+        return deleted
             )
         """, (delete_count,))
         await self._db.commit()
