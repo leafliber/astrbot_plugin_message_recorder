@@ -423,7 +423,3 @@ class Database:
         logger.debug(f"[MessageRecorder] 按数量清理了 {deleted} 条记录")
 
         return deleted
-            )
-        """, (delete_count,))
-        await self._db.commit()
-        return cursor.rowcount
