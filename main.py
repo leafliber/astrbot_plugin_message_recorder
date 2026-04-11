@@ -151,8 +151,7 @@ class MessageRecorder(Star):
                 plugin_name="astrbot_plugin_message_recorder",
                 blueprint=blueprint,
                 url_prefix="/message_recorder",
-                description="消息记录器 Web 面板 - 支持消息查询、导出、导入和仪表盘统计",
-                require_auth=True
+                description="消息记录器 Web 面板 - 支持消息查询、导出、导入和仪表盘统计"
             )
 
             # 设置插件元数据
