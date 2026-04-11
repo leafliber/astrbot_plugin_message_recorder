@@ -17,6 +17,11 @@ from ..models import QueryFilter, MessageRecord
 from ..time_utils import parse_time_range
 
 
+# 安全配置
+MAX_IMPORT_FILE_SIZE = 10 * 1024 * 1024  # 10MB
+MAX_EXPORT_FILE_AGE = 3600  # 导出文件有效期 1 小时
+ALLOWED_IMPORT_EXTENSIONS = {".json", ".csv"}  # 允许的导入文件扩展名
+
 # 导出任务存储
 _export_tasks: Dict[str, Dict[str, Any]] = {}
 _import_tasks: Dict[str, Dict[str, Any]] = {}
@@ -28,6 +33,9 @@ def create_blueprint(plugin_instance) -> Blueprint:
 
     # 获取数据库实例
     db: Optional[Database] = plugin_instance._db
+
+    # 启动过期文件清理任务
+    asyncio.create_task(cleanup_expired_export_files())
 
     # 静态文件路由（不需要认证）
     @bp.route("/static/<path:filename>")
@@ -388,6 +396,24 @@ def create_blueprint(plugin_instance) -> Blueprint:
         if task["status"] != "completed":
             return jsonify({"success": False, "error": "导出未完成"}), 400
 
+        # 安全检查：时效限制
+        completed_at = task.get("completed_at", 0)
+        file_age = time.time() - completed_at
+        if file_age > MAX_EXPORT_FILE_AGE:
+            # 删除过期文件
+            file_path = task.get("file_path")
+            if file_path and os.path.exists(file_path):
+                try:
+                    os.remove(file_path)
+                except:
+                    pass
+            # 清理任务记录
+            _export_tasks.pop(task_id, None)
+            return jsonify({
+                "success": False,
+                "error": "导出文件已过期，请重新导出"
+            }), 410  # 410 Gone
+
         file_path = task.get("file_path")
         if not file_path or not os.path.exists(file_path):
             return jsonify({"success": False, "error": "文件不存在"}), 404
@@ -415,21 +441,50 @@ def create_blueprint(plugin_instance) -> Blueprint:
             file = files["file"]
             mode = request.form.get("mode", "merge")
 
+            # 安全检查：文件大小限制
+            if file.content_length and file.content_length > MAX_IMPORT_FILE_SIZE:
+                return jsonify({
+                    "success": False,
+                    "error": f"文件大小超过限制（最大 {MAX_IMPORT_FILE_SIZE // (1024*1024)}MB）"
+                }), 400
+
+            # 安全检查：文件名处理（防止路径遍历）
+            original_filename = file.filename or "unknown"
+            safe_filename = Path(original_filename).name  # 只取文件名，去除路径部分
+            file_ext = Path(safe_filename).suffix.lower()
+
+            # 安全检查：文件扩展名白名单
+            if file_ext not in ALLOWED_IMPORT_EXTENSIONS:
+                return jsonify({
+                    "success": False,
+                    "error": f"不支持的文件格式，仅支持 JSON 和 CSV"
+                }), 400
+
             # 创建任务 ID
             task_id = f"import_{uuid.uuid4().hex[:12]}"
 
-            # 保存临时文件
+            # 保存临时文件（使用安全的文件名）
             temp_dir = Path(plugin_instance.context.get_plugin_path()) / "data" / "temp"
             temp_dir.mkdir(parents=True, exist_ok=True)
-            temp_file = temp_dir / f"{task_id}_{file.filename}"
+            temp_file = temp_dir / f"{task_id}{file_ext}"  # 只使用 task_id + 扩展名，不包含原始文件名
 
             await file.save(str(temp_file))
+
+            # 再次检查文件大小（实际保存后）
+            actual_size = temp_file.stat().st_size
+            if actual_size > MAX_IMPORT_FILE_SIZE:
+                # 删除超大的临时文件
+                temp_file.unlink()
+                return jsonify({
+                    "success": False,
+                    "error": f"文件大小超过限制（最大 {MAX_IMPORT_FILE_SIZE // (1024*1024)}MB）"
+                }), 400
 
             # 创建任务记录
             _import_tasks[task_id] = {
                 "status": "pending",
                 "mode": mode,
-                "filename": file.filename,
+                "filename": safe_filename,  # 存储安全的文件名用于显示
                 "file_path": str(temp_file),
                 "created_at": time.time(),
                 "total_records": 0,
@@ -451,13 +506,14 @@ def create_blueprint(plugin_instance) -> Blueprint:
                 "data": {
                     "task_id": task_id,
                     "status": "pending",
-                    "filename": file.filename,
-                    "mode": mode
+                    "filename": safe_filename,
+                    "mode": mode,
+                    "file_size": actual_size
                 }
             })
         except Exception as e:
             logger.error(f"[MessageRecorder Web] 创建导入任务失败: {e}")
-            return jsonify({"success": False, "error": str(e)}), 500
+            return jsonify({"success": False, "error": "服务器内部错误"}), 500
 
     @bp.route("/api/import/status/<task_id>")
     async def api_import_status(task_id: str):
@@ -889,3 +945,40 @@ def get_platform_icon(platform: str) -> str:
         "wechat": "[WX]",
     }
     return icons.get(platform, f"[{platform}]")
+
+
+async def cleanup_expired_export_files():
+    """定期清理过期的导出文件和任务记录"""
+    while True:
+        try:
+            # 每 10 分钟检查一次
+            await asyncio.sleep(600)
+
+            current_time = time.time()
+            expired_tasks = []
+
+            for task_id, task in list(_export_tasks.items()):
+                completed_at = task.get("completed_at", 0)
+                if completed_at and current_time - completed_at > MAX_EXPORT_FILE_AGE:
+                    expired_tasks.append(task_id)
+
+                    # 删除文件
+                    file_path = task.get("file_path")
+                    if file_path and os.path.exists(file_path):
+                        try:
+                            os.remove(file_path)
+                            logger.debug(f"[MessageRecorder Web] 已清理过期导出文件: {file_path}")
+                        except Exception as e:
+                            logger.warning(f"[MessageRecorder Web] 清理导出文件失败: {e}")
+
+            # 清理任务记录
+            for task_id in expired_tasks:
+                _export_tasks.pop(task_id, None)
+
+            if expired_tasks:
+                logger.info(f"[MessageRecorder Web] 已清理 {len(expired_tasks)} 个过期导出任务")
+
+        except asyncio.CancelledError:
+            break
+        except Exception as e:
+            logger.error(f"[MessageRecorder Web] 清理过期文件任务出错: {e}")
