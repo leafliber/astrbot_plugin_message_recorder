@@ -38,11 +38,15 @@ modal?.addEventListener('click', (e) => {
 const loadingOverlay = document.getElementById('loadingOverlay');
 
 function showLoading() {
-  loadingOverlay?.style.display = 'flex';
+  if (loadingOverlay) {
+    loadingOverlay.style.display = 'flex';
+  }
 }
 
 function hideLoading() {
-  loadingOverlay?.style.display = 'none';
+  if (loadingOverlay) {
+    loadingOverlay.style.display = 'none';
+  }
 }
 
 // ========== 工具函数 ==========

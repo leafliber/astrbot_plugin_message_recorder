@@ -32,10 +32,13 @@ _import_tasks: Dict[str, Dict[str, Any]] = {}
 # 插件目录名
 PLUGIN_DIR_NAME = "astrbot_plugin_message_recorder"
 
+# 当前模块所在目录（web/blueprint.py 的父目录的父目录就是插件根目录）
+_current_dir = Path(__file__).resolve().parent.parent
+
 
 def get_plugin_dir() -> Path:
-    """获取插件目录路径"""
-    return Path(get_astrbot_plugin_path()) / PLUGIN_DIR_NAME
+    """获取插件目录路径（使用当前模块位置）"""
+    return _current_dir
 
 
 def get_plugin_data_dir() -> Path:
@@ -48,14 +51,16 @@ def create_blueprint(plugin_instance) -> Blueprint:
     # 获取插件目录路径
     plugin_dir = get_plugin_dir()
 
+    logger.info(f"[MessageRecorder Web] 插件目录: {plugin_dir}")
+
     # 创建 Blueprint，指定模板和静态文件目录
-    # static_url_path 使用相对路径，Blueprint 注册时 url_prefix 会自动添加
+    # 注意：static_url_path 不需要前导斜杠，Blueprint 注册时 url_prefix 会自动添加
     bp = Blueprint(
         "message_recorder_web",
         __name__,
         template_folder=str(plugin_dir / "templates"),
         static_folder=str(plugin_dir / "static"),
-        static_url_path="static"  # 相对路径，最终会是 /message_recorder/static
+        static_url_path="/message_recorder/static"  # 明确指定完整路径
     )
 
     # 获取数据库实例
