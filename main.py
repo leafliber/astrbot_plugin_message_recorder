@@ -58,7 +58,7 @@ class MessageRecorder(Star):
         # 尝试卸载 Web 面板（仅在已注册时）
         if self._web_panel_registered:
             try:
-                from astrbot_plugin_multi_web_manager import get_registry
+                from data.plugins.astrbot_plugin_multi_web_manager import get_registry
                 registry = get_registry()
                 if registry:
                     removed = registry.unregister_plugin("astrbot_plugin_message_recorder")
@@ -126,20 +126,18 @@ class MessageRecorder(Star):
             logger.info("[MessageRecorder] Web 面板已禁用（配置 enable_web_ui=False）")
             return
 
-        # 检查依赖插件是否安装
+        # 尝试导入依赖插件（使用 AstrBot 插件路径）
         try:
-            import importlib
-            importlib.import_module("astrbot_plugin_multi_web_manager")
+            from data.plugins.astrbot_plugin_multi_web_manager import get_registry
         except ImportError:
             logger.warning(
-                "[MessageRecorder] 未安装依赖插件 astrbot_plugin_multi_web_manager，"
-                "Web 面板功能不可用。请安装该插件以启用 Web 功能。"
+                "[MessageRecorder] 未找到 astrbot_plugin_multi_web_manager，"
+                "Web 面板功能不可用。请确保该插件已安装并启用。"
             )
             return
 
         # 尝试注册 Web 面板
         try:
-            from astrbot_plugin_multi_web_manager import get_registry
             from .web.blueprint import create_blueprint
 
             registry = get_registry()
