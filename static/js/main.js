@@ -203,13 +203,3 @@ async function showMessageContext(messageId) {
 
   showModal(content);
 }
-
-// ========== 页面初始化 ==========
-
-document.addEventListener('DOMContentLoaded', () => {
-  // 检查认证状态
-  const token = api.getStoredToken();
-  if (!token) {
-    console.log('未找到认证 token，API 调用可能需要认证');
-  }
-});

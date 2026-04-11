@@ -1,53 +1,22 @@
 /**
  * 消息记录器 API 封装
+ * 认证由 MultiWebManager 插件统一处理，本插件无需处理认证
  */
 
 class MessageRecorderAPI {
   constructor(baseUrl = '/message_recorder/api') {
     this.baseUrl = baseUrl;
-    this.authToken = this.getStoredToken();
-  }
-
-  getStoredToken() {
-    // 从 localStorage 或 sessionStorage 获取 token
-    return localStorage.getItem('auth_token') || sessionStorage.getItem('auth_token');
-  }
-
-  setAuthToken(token) {
-    this.authToken = token;
-    if (token) {
-      localStorage.setItem('auth_token', token);
-    } else {
-      localStorage.removeItem('auth_token');
-    }
-  }
-
-  getHeaders() {
-    const headers = {
-      'Content-Type': 'application/json'
-    };
-    if (this.authToken) {
-      headers['Authorization'] = `Bearer ${this.authToken}`;
-    }
-    return headers;
   }
 
   async request(url, options = {}) {
     const fullUrl = url.startsWith('http') ? url : this.baseUrl + url;
     options.headers = {
-      ...options.headers,
-      ...this.getHeaders()
+      'Content-Type': 'application/json',
+      ...options.headers
     };
 
     try {
       const response = await fetch(fullUrl, options);
-
-      if (response.status === 401) {
-        // 认证失败，提示用户登录
-        console.warn('认证失败，请重新登录');
-        return { success: false, error: '认证失败' };
-      }
-
       const data = await response.json();
       return data;
     } catch (error) {
@@ -143,18 +112,11 @@ class MessageRecorderAPI {
     formData.append('file', file);
     formData.append('mode', mode);
 
-    const options = {
+    return this.request('/import', {
       method: 'POST',
       body: formData,
       headers: {} // 不设置 Content-Type，让浏览器自动设置
-    };
-
-    // 需要单独处理认证头
-    if (this.authToken) {
-      options.headers['Authorization'] = `Bearer ${this.authToken}`;
-    }
-
-    return this.request('/import', options);
+    });
   }
 
   async getImportStatus(taskId) {
