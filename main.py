@@ -30,6 +30,7 @@ class MessageRecorder(Star):
         self._db: Optional[Database] = None
         self._api: Optional[MessageRecorderAPI] = None
         self._cleanup_task: Optional[asyncio.Task] = None
+        self._web_panel_registered: bool = False  # Web 面板注册状态
 
     async def initialize(self):
         """插件初始化"""
@@ -39,6 +40,8 @@ class MessageRecorder(Star):
             self._api = MessageRecorderAPI(self._db)
             # 启动定时清理任务
             self._start_cleanup_task()
+            # 注册 Web 面板到 MultiWebManager
+            await self._register_web_panel()
             logger.info("[MessageRecorder] 插件初始化完成")
         except Exception as e:
             logger.error(f"[MessageRecorder] 初始化失败: {e}")
@@ -51,6 +54,20 @@ class MessageRecorder(Star):
                 await self._cleanup_task
             except asyncio.CancelledError:
                 pass
+
+        # 尝试卸载 Web 面板（仅在已注册时）
+        if self._web_panel_registered:
+            try:
+                from astrbot_plugin_multi_web_manager import get_registry
+                registry = get_registry()
+                if registry:
+                    removed = registry.unregister_plugin("astrbot_plugin_message_recorder")
+                    if removed:
+                        logger.info(f"[MessageRecorder] 已移除 {removed} 个 Web 路由")
+            except ImportError:
+                pass
+            except Exception as e:
+                logger.warning(f"[MessageRecorder] 卸载 Web 面板时出错: {e}")
 
         if self._db:
             await self._db.close()
@@ -100,6 +117,58 @@ class MessageRecorder(Star):
     def get_api(self) -> Optional[MessageRecorderAPI]:
         """获取 API 接口，供其他插件调用"""
         return self._api
+
+    async def _register_web_panel(self):
+        """注册 Web 面板到 MultiWebManager"""
+        # 检查 WebUI 开关
+        enable_web_ui = self.config.get("enable_web_ui", True)
+        if not enable_web_ui:
+            logger.info("[MessageRecorder] Web 面板已禁用（配置 enable_web_ui=False）")
+            return
+
+        # 检查依赖插件是否安装
+        try:
+            import importlib
+            importlib.import_module("astrbot_plugin_multi_web_manager")
+        except ImportError:
+            logger.warning(
+                "[MessageRecorder] 未安装依赖插件 astrbot_plugin_multi_web_manager，"
+                "Web 面板功能不可用。请安装该插件以启用 Web 功能。"
+            )
+            return
+
+        # 尝试注册 Web 面板
+        try:
+            from astrbot_plugin_multi_web_manager import get_registry
+            from .web.blueprint import create_blueprint
+
+            registry = get_registry()
+            if registry is None:
+                logger.warning("[MessageRecorder] MultiWebManager 注册中心未初始化，Web 面板注册失败")
+                return
+
+            blueprint = create_blueprint(self)
+
+            registry.register_blueprint(
+                plugin_name="astrbot_plugin_message_recorder",
+                blueprint=blueprint,
+                url_prefix="/message_recorder",
+                description="消息记录器 Web 面板 - 支持消息查询、导出、导入和仪表盘统计",
+                require_auth=True
+            )
+
+            # 设置插件元数据
+            registry.set_plugin_metadata("astrbot_plugin_message_recorder", {
+                "name": "消息记录器",
+                "version": "1.0.0",
+                "desc": "多平台消息记录器，提供 Web 面板进行查询、导出和统计",
+                "author": "cassia",
+            })
+
+            logger.info("[MessageRecorder] Web 面板已注册到 MultiWebManager，访问 /message_recorder/")
+            self._web_panel_registered = True
+        except Exception as e:
+            logger.error(f"[MessageRecorder] 注册 Web 面板失败: {e}")
 
     # ========== 消息监听 ==========
 

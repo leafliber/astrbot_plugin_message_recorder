@@ -1,0 +1,58 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>{% block title %}消息记录器{% endblock %}</title>
+  <link rel="stylesheet" href="/message_recorder/static/css/main.css">
+  {% block extra_css %}{% endblock %}
+</head>
+<body>
+  <nav class="navbar">
+    <div class="nav-container">
+      <a href="/message_recorder/" class="nav-brand">📊 消息记录器</a>
+      <button class="nav-toggle" id="navToggle">☰</button>
+      <div class="nav-links" id="navLinks">
+        <a href="/message_recorder/" class="{% if active_page == 'dashboard' %}active{% endif %}">仪表盘</a>
+        <a href="/message_recorder/search" class="{% if active_page == 'search' %}active{% endif %}">搜索</a>
+        <a href="/message_recorder/export" class="{% if active_page == 'export' %}active{% endif %}">导出</a>
+        <a href="/message_recorder/import" class="{% if active_page == 'import' %}active{% endif %}">导入</a>
+      </div>
+    </div>
+  </nav>
+
+  <main class="main-content">
+    {% block content %}{% endblock %}
+  </main>
+
+  <footer class="footer">
+    <div class="footer-container">
+      <span>消息记录器 v1.0.0</span>
+      <span>Powered by AstrBot</span>
+    </div>
+  </footer>
+
+  <!-- 消息详情模态框 -->
+  <div class="modal" id="messageModal">
+    <div class="modal-content">
+      <div class="modal-header">
+        <h3>消息详情</h3>
+        <button class="modal-close" id="modalClose">×</button>
+      </div>
+      <div class="modal-body" id="modalBody">
+        <!-- 动态内容 -->
+      </div>
+    </div>
+  </div>
+
+  <!-- 加载指示器 -->
+  <div class="loading-overlay" id="loadingOverlay" style="display: none;">
+    <div class="loading-spinner"></div>
+    <span>加载中...</span>
+  </div>
+
+  <script src="/message_recorder/static/js/api.js"></script>
+  <script src="/message_recorder/static/js/main.js"></script>
+  {% block extra_js %}{% endblock %}
+</body>
+</html>

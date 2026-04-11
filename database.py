@@ -431,3 +431,279 @@ class Database:
         logger.debug(f"[MessageRecorder] 按数量清理了 {deleted} 条记录")
 
         return deleted
+
+    # ========== Web 扩展查询方法 ==========
+
+    async def get_timeline_stats(
+        self,
+        interval: str = "day",
+        start_time: Optional[int] = None,
+        end_time: Optional[int] = None,
+        platform: Optional[str] = None,
+        group_id: Optional[str] = None
+    ) -> List[Dict]:
+        """
+        按时间间隔统计消息数量
+
+        Args:
+            interval: 时间间隔 (day, week, month)
+            start_time: 开始时间戳（毫秒）
+            end_time: 结束时间戳（毫秒）
+            platform: 平台筛选
+            group_id: 群组筛选
+
+        Returns:
+            时间点统计数据列表
+        """
+        # SQLite 时间格式化
+        # day: strftime('%Y-%m-%d', timestamp/1000, 'unixepoch')
+        # week: strftime('%Y-W%W', timestamp/1000, 'unixepoch')
+        # month: strftime('%Y-%m', timestamp/1000, 'unixepoch')
+
+        if interval == "day":
+            time_format = "strftime('%Y-%m-%d', timestamp/1000, 'unixepoch')"
+        elif interval == "week":
+            time_format = "strftime('%Y-W%W', timestamp/1000, 'unixepoch')"
+        elif interval == "month":
+            time_format = "strftime('%Y-%m', timestamp/1000, 'unixepoch')"
+        else:
+            time_format = "strftime('%Y-%m-%d', timestamp/1000, 'unixepoch')"
+
+        conditions = []
+        params: List[Any] = []
+
+        if start_time:
+            conditions.append("timestamp >= ?")
+            params.append(start_time)
+        if end_time:
+            conditions.append("timestamp <= ?")
+            params.append(end_time)
+        if platform:
+            conditions.append("platform = ?")
+            params.append(platform)
+        if group_id:
+            conditions.append("group_id = ?")
+            params.append(group_id)
+
+        where_clause = " AND ".join(conditions) if conditions else "1=1"
+
+        sql = f"""
+            SELECT
+                {time_format} as date,
+                COUNT(*) as count,
+                SUM(CASE WHEN message_type = 'group' THEN 1 ELSE 0 END) as group_count,
+                SUM(CASE WHEN message_type = 'private' THEN 1 ELSE 0 END) as private_count
+            FROM messages
+            WHERE {where_clause}
+            GROUP BY date
+            ORDER BY date ASC
+        """
+
+        cursor = await self._db.execute(sql, params)
+        rows = await cursor.fetchall()
+
+        return [
+            {
+                "date": row[0],
+                "count": row[1],
+                "group_count": row[2],
+                "private_count": row[3]
+            }
+            for row in rows
+        ]
+
+    async def get_sender_ranking(
+        self,
+        limit: int = 20,
+        start_time: Optional[int] = None,
+        end_time: Optional[int] = None,
+        platform: Optional[str] = None,
+        group_id: Optional[str] = None
+    ) -> List[Dict]:
+        """
+        获取发送者排行榜
+
+        Returns:
+            发送者统计数据列表
+        """
+        conditions = []
+        params: List[Any] = []
+
+        if start_time:
+            conditions.append("timestamp >= ?")
+            params.append(start_time)
+        if end_time:
+            conditions.append("timestamp <= ?")
+            params.append(end_time)
+        if platform:
+            conditions.append("platform = ?")
+            params.append(platform)
+        if group_id:
+            conditions.append("group_id = ?")
+            params.append(group_id)
+
+        where_clause = " AND ".join(conditions) if conditions else "1=1"
+
+        sql = f"""
+            SELECT
+                sender_id,
+                sender_name,
+                platform,
+                COUNT(*) as count
+            FROM messages
+            WHERE {where_clause}
+            GROUP BY sender_id, platform
+            ORDER BY count DESC
+            LIMIT ?
+        """
+        params.append(limit)
+
+        cursor = await self._db.execute(sql, params)
+        rows = await cursor.fetchall()
+
+        return [
+            {
+                "sender_id": row[0],
+                "sender_name": row[1],
+                "platform": row[2],
+                "count": row[3]
+            }
+            for row in rows
+        ]
+
+    async def get_group_ranking(
+        self,
+        limit: int = 20,
+        start_time: Optional[int] = None,
+        end_time: Optional[int] = None,
+        platform: Optional[str] = None
+    ) -> List[Dict]:
+        """
+        获取群组活跃度排行
+
+        Returns:
+            群组统计数据列表
+        """
+        conditions = ["message_type = 'group'"]
+        params: List[Any] = []
+
+        if start_time:
+            conditions.append("timestamp >= ?")
+            params.append(start_time)
+        if end_time:
+            conditions.append("timestamp <= ?")
+            params.append(end_time)
+        if platform:
+            conditions.append("platform = ?")
+            params.append(platform)
+
+        where_clause = " AND ".join(conditions)
+
+        sql = f"""
+            SELECT
+                group_id,
+                platform,
+                COUNT(*) as count,
+                COUNT(DISTINCT sender_id) as sender_count
+            FROM messages
+            WHERE {where_clause}
+            GROUP BY group_id, platform
+            ORDER BY count DESC
+            LIMIT ?
+        """
+        params.append(limit)
+
+        cursor = await self._db.execute(sql, params)
+        rows = await cursor.fetchall()
+
+        return [
+            {
+                "group_id": row[0],
+                "platform": row[1],
+                "count": row[2],
+                "sender_count": row[3]
+            }
+            for row in rows
+        ]
+
+    async def get_distinct_platforms(self) -> List[str]:
+        """获取所有平台列表"""
+        sql = "SELECT DISTINCT platform FROM messages ORDER BY platform"
+        cursor = await self._db.execute(sql)
+        rows = await cursor.fetchall()
+        return [row[0] for row in rows]
+
+    async def get_distinct_senders(
+        self,
+        platform: Optional[str] = None,
+        group_id: Optional[str] = None,
+        limit: int = 50
+    ) -> List[Dict]:
+        """获取发送者列表"""
+        conditions = []
+        params: List[Any] = []
+
+        if platform:
+            conditions.append("platform = ?")
+            params.append(platform)
+        if group_id:
+            conditions.append("group_id = ?")
+            params.append(group_id)
+
+        where_clause = " AND ".join(conditions) if conditions else "1=1"
+
+        sql = f"""
+            SELECT DISTINCT sender_id, sender_name, platform
+            FROM messages
+            WHERE {where_clause}
+            ORDER BY sender_name, sender_id
+            LIMIT ?
+        """
+        params.append(limit)
+
+        cursor = await self._db.execute(sql, params)
+        rows = await cursor.fetchall()
+
+        return [
+            {
+                "id": row[0],
+                "name": row[1] or row[0],
+                "platform": row[2]
+            }
+            for row in rows
+        ]
+
+    async def get_distinct_groups(
+        self,
+        platform: Optional[str] = None,
+        limit: int = 50
+    ) -> List[Dict]:
+        """获取群组列表"""
+        conditions = ["message_type = 'group'", "group_id IS NOT NULL"]
+        params: List[Any] = []
+
+        if platform:
+            conditions.append("platform = ?")
+            params.append(platform)
+
+        where_clause = " AND ".join(conditions)
+
+        sql = f"""
+            SELECT DISTINCT group_id, platform
+            FROM messages
+            WHERE {where_clause}
+            ORDER BY group_id
+            LIMIT ?
+        """
+        params.append(limit)
+
+        cursor = await self._db.execute(sql, params)
+        rows = await cursor.fetchall()
+
+        return [
+            {
+                "id": row[0],
+                "platform": row[1]
+            }
+            for row in rows
+        ]
