@@ -4,6 +4,8 @@ import os
 import asyncio
 import uuid
 import time
+import json
+import csv
 from pathlib import Path
 from typing import Dict, Any, Optional, List
 from datetime import datetime
@@ -11,6 +13,7 @@ from datetime import datetime
 from quart import Blueprint, jsonify, request, render_template, send_file, send_from_directory
 
 from astrbot.api import logger
+from astrbot.core.utils.astrbot_path import get_astrbot_plugin_path, get_astrbot_plugin_data_path
 
 from ..database import Database
 from ..models import QueryFilter, MessageRecord
@@ -26,19 +29,32 @@ ALLOWED_IMPORT_EXTENSIONS = {".json", ".csv"}  # 允许的导入文件扩展名
 _export_tasks: Dict[str, Dict[str, Any]] = {}
 _import_tasks: Dict[str, Dict[str, Any]] = {}
 
+# 插件目录名
+PLUGIN_DIR_NAME = "astrbot_plugin_message_recorder"
+
+
+def get_plugin_dir() -> Path:
+    """获取插件目录路径"""
+    return Path(get_astrbot_plugin_path()) / PLUGIN_DIR_NAME
+
+
+def get_plugin_data_dir() -> Path:
+    """获取插件数据目录路径"""
+    return Path(get_astrbot_plugin_data_path()) / PLUGIN_DIR_NAME
+
 
 def create_blueprint(plugin_instance) -> Blueprint:
     """创建消息记录器 Web Blueprint"""
-    # 获取插件路径
-    plugin_path = Path(plugin_instance.context.get_plugin_path())
+    # 获取插件目录路径
+    plugin_dir = get_plugin_dir()
 
     # 创建 Blueprint，指定模板和静态文件目录
     # static_url_path 使用相对路径，Blueprint 注册时 url_prefix 会自动添加
     bp = Blueprint(
         "message_recorder_web",
         __name__,
-        template_folder=str(plugin_path / "templates"),
-        static_folder=str(plugin_path / "static"),
+        template_folder=str(plugin_dir / "templates"),
+        static_folder=str(plugin_dir / "static"),
         static_url_path="static"  # 相对路径，最终会是 /message_recorder/static
     )
 
@@ -470,7 +486,7 @@ def create_blueprint(plugin_instance) -> Blueprint:
             task_id = f"import_{uuid.uuid4().hex[:12]}"
 
             # 保存临时文件（使用安全的文件名）
-            temp_dir = Path(plugin_instance.context.get_plugin_path()) / "data" / "temp"
+            temp_dir = get_plugin_data_dir() / "temp"
             temp_dir.mkdir(parents=True, exist_ok=True)
             temp_file = temp_dir / f"{task_id}{file_ext}"  # 只使用 task_id + 扩展名，不包含原始文件名
 
