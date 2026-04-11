@@ -29,24 +29,30 @@ _import_tasks: Dict[str, Dict[str, Any]] = {}
 
 def create_blueprint(plugin_instance) -> Blueprint:
     """创建消息记录器 Web Blueprint"""
-    bp = Blueprint("message_recorder_web", __name__)
+    # 获取插件路径
+    plugin_path = Path(plugin_instance.context.get_plugin_path())
+
+    # 创建 Blueprint，指定模板和静态文件目录
+    # static_url_path 使用相对路径，Blueprint 注册时 url_prefix 会自动添加
+    bp = Blueprint(
+        "message_recorder_web",
+        __name__,
+        template_folder=str(plugin_path / "templates"),
+        static_folder=str(plugin_path / "static"),
+        static_url_path="static"  # 相对路径，最终会是 /message_recorder/static
+    )
 
     # 获取数据库实例
     db: Optional[Database] = plugin_instance._db
 
-    # 启动过期文件清理任务
-    asyncio.create_task(cleanup_expired_export_files())
-
-    # 静态文件路由（不需要认证）
-    @bp.route("/static/<path:filename>")
-    async def static_files(filename: str):
-        static_dir = Path(plugin_instance.context.get_plugin_path()) / "static"
-        return await send_from_directory(str(static_dir), filename)
-
     # 主页面 - 仪表盘
     @bp.route("/")
     async def index():
-        return await render_template("index.html")
+        try:
+            return await render_template("index.html")
+        except Exception as e:
+            logger.error(f"[MessageRecorder Web] 渲染主页模板失败: {e}")
+            return f"<h1>模板渲染错误</h1><p>{str(e)}</p><p>模板目录: {bp.template_folder}</p>", 500
 
     # 搜索页面
     @bp.route("/search")
