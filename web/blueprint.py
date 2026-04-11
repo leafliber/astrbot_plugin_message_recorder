@@ -54,13 +54,14 @@ def create_blueprint(plugin_instance) -> Blueprint:
     logger.info(f"[MessageRecorder Web] 插件目录: {plugin_dir}")
 
     # 创建 Blueprint，指定模板和静态文件目录
-    # 注意：static_url_path 不需要前导斜杠，Blueprint 注册时 url_prefix 会自动添加
+    # static_url_path 是相对于 Blueprint url_prefix 的路径
+    # 注册时 url_prefix="/message_recorder"，所以静态文件路径会是 "/message_recorder/static"
     bp = Blueprint(
         "message_recorder_web",
         __name__,
         template_folder=str(plugin_dir / "templates"),
         static_folder=str(plugin_dir / "static"),
-        static_url_path="/message_recorder/static"  # 明确指定完整路径
+        static_url_path="/static"  # 相对路径，注册后会变成 /message_recorder/static
     )
 
     # 获取数据库实例
