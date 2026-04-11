@@ -107,11 +107,17 @@ class MessageRecorder(Star):
     async def on_message(self, event: AstrMessageEvent):
         """
         监听所有消息事件并保存到数据库
+        注意：此监听器不应拦截消息，让事件继续传递
         """
         if not self._db:
             logger.debug("[MessageRecorder] 跳过消息: 数据库未初始化")
-            return
+            return  # 不拦截，让事件继续
 
+        # 使用 create_task 异步执行保存，避免阻塞事件处理
+        asyncio.create_task(self._save_message_async(event))
+
+    async def _save_message_async(self, event: AstrMessageEvent):
+        """异步保存消息，不阻塞事件处理"""
         logger.debug("[MessageRecorder] 收到消息事件，开始处理")
 
         try:

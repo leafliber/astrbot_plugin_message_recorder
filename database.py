@@ -167,6 +167,14 @@ class Database:
         # 时间筛选 - 支持 time 字段
         if query_filter.time:
             start_time, end_time = parse_time_range(query_filter.time)
+            # 调试日志：显示实际的时间范围参数
+            from datetime import datetime
+            start_dt = datetime.fromtimestamp(start_time / 1000)
+            end_dt = datetime.fromtimestamp(end_time / 1000)
+            logger.debug(
+                f"[MessageRecorder] 时间范围参数: start={start_time} ({start_dt}), "
+                f"end={end_time} ({end_dt})"
+            )
             conditions.append("timestamp >= ?")
             params.append(start_time)
             conditions.append("timestamp <= ?")
@@ -194,7 +202,7 @@ class Database:
 
         logger.debug(
             f"[MessageRecorder] 执行查询: WHERE {where_clause}, "
-            f"limit={query_filter.limit}, offset={query_filter.offset}, order={order_clause}"
+            f"params={params}, limit={query_filter.limit}, offset={query_filter.offset}, order={order_clause}"
         )
 
         sql = f"""
