@@ -957,7 +957,7 @@ async def execute_export_task(task_id: str, db: Database, query_filter: QueryFil
     try:
         task["status"] = "processing"
 
-        messages = await get_db().query_messages(query_filter)
+        messages = await db.query_messages(query_filter)
 
         export_dir = Path("/tmp") / "message_recorder_exports"
         export_dir.mkdir(parents=True, exist_ok=True)
@@ -968,7 +968,7 @@ async def execute_export_task(task_id: str, db: Database, query_filter: QueryFil
 
         if include_media and format_type == "json":
             file_path = await _export_with_media(
-                task_id, get_db(), messages, export_dir,
+                task_id, db, messages, export_dir,
                 include_chain, include_raw, task,
             )
         elif format_type == "json":
@@ -1208,7 +1208,7 @@ async def execute_import_task(task_id: str, db: Database, file_path: str, mode: 
                 )
 
                 if mode == "skip_duplicates" or mode == "merge":
-                    await get_db().save_message(msg_record)
+                    await db.save_message(msg_record)
                     imported += 1
 
             except Exception as e:
