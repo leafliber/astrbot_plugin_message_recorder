@@ -11,6 +11,7 @@ from astrbot.api import logger
 
 from .models import MessageRecord, QueryFilter, MessageStats
 from .time_utils import parse_time_range
+from .media_downloader import MediaDownloader
 
 
 class Database:
@@ -707,3 +708,41 @@ class Database:
             }
             for row in rows
         ]
+
+    async def get_media_paths_before(self, cutoff_timestamp: int) -> List[str]:
+        """获取指定时间戳之前的消息中包含的媒体文件路径"""
+        cursor = await self._db.execute(
+            "SELECT message_chain FROM messages WHERE timestamp < ? AND message_chain IS NOT NULL",
+            (cutoff_timestamp,),
+        )
+        rows = await cursor.fetchall()
+        paths = []
+        for row in rows:
+            paths.extend(MediaDownloader.extract_media_paths(row[0]))
+        return paths
+
+    async def get_media_paths_over_limit(self, max_records: int) -> List[str]:
+        """获取超出数量限制的旧消息中包含的媒体文件路径"""
+        cursor = await self._db.execute("SELECT COUNT(*) FROM messages")
+        result = await cursor.fetchone()
+        current_count = result[0] if result else 0
+
+        if current_count <= max_records:
+            return []
+
+        delete_count = current_count - max_records
+        cursor = await self._db.execute(
+            """
+            SELECT message_chain FROM messages
+            WHERE id IN (
+                SELECT id FROM messages ORDER BY timestamp ASC LIMIT ?
+            )
+            AND message_chain IS NOT NULL
+            """,
+            (delete_count,),
+        )
+        rows = await cursor.fetchall()
+        paths = []
+        for row in rows:
+            paths.extend(MediaDownloader.extract_media_paths(row[0]))
+        return paths

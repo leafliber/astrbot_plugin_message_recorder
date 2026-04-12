@@ -13,6 +13,7 @@ from .database import Database
 from .api import MessageRecorderAPI
 from .models import MessageRecord
 from .time_utils import parse_time_range, format_time_range
+from .media_downloader import MediaDownloader, MEDIA_TYPE_MAP
 
 
 @register(
@@ -29,8 +30,9 @@ class MessageRecorder(Star):
         self.config = config
         self._db: Optional[Database] = None
         self._api: Optional[MessageRecorderAPI] = None
+        self._media_downloader: Optional[MediaDownloader] = None
         self._cleanup_task: Optional[asyncio.Task] = None
-        self._web_panel_registered: bool = False  # Web 面板注册状态
+        self._web_panel_registered: bool = False
 
     async def initialize(self):
         """插件初始化"""
@@ -38,9 +40,19 @@ class MessageRecorder(Star):
             self._db = Database("astrbot_plugin_message_recorder")
             await self._db.init()
             self._api = MessageRecorderAPI(self._db)
-            # 启动定时清理任务
+
+            if self.config.get("save_media_files", False):
+                image_save_mode = self.config.get("image_save_mode", "original")
+                self._media_downloader = MediaDownloader(
+                    "astrbot_plugin_message_recorder",
+                    image_save_mode=image_save_mode,
+                )
+                logger.info(
+                    f"[MessageRecorder] 多媒体文件保存已启用，"
+                    f"图片模式: {image_save_mode}"
+                )
+
             self._start_cleanup_task()
-            # 注册 Web 面板到 MultiWebManager
             await self._register_web_panel()
             logger.info("[MessageRecorder] 插件初始化完成")
         except Exception as e:
@@ -55,7 +67,9 @@ class MessageRecorder(Star):
             except asyncio.CancelledError:
                 pass
 
-        # 尝试卸载 Web 面板（仅在已注册时）
+        if self._media_downloader:
+            await self._media_downloader.close()
+
         if self._web_panel_registered:
             try:
                 from data.plugins.astrbot_plugin_multi_web_manager import get_registry
@@ -94,23 +108,36 @@ class MessageRecorder(Star):
 
     async def _do_cleanup(self) -> dict:
         """执行清理操作"""
-        result = {"by_age": 0, "by_limit": 0}
+        result = {"by_age": 0, "by_limit": 0, "media_files": 0}
         if not self._db:
             return result
 
-        # 按时间清理
         retention_days = self.config.get("retention_days", 30)
         if retention_days > 0:
+            media_paths = await self._db.get_media_paths_before(
+                int((time.time() - retention_days * 86400) * 1000)
+            )
             result["by_age"] = await self._db.cleanup_by_age(retention_days)
+            if self._media_downloader and media_paths:
+                result["media_files"] += self._media_downloader.delete_media_files(
+                    media_paths
+                )
 
-        # 按数量限制清理
         max_records = self.config.get("max_records", 100000)
         if max_records > 0:
+            media_paths = await self._db.get_media_paths_over_limit(max_records)
             result["by_limit"] = await self._db.cleanup_by_limit(max_records)
+            if self._media_downloader and media_paths:
+                result["media_files"] += self._media_downloader.delete_media_files(
+                    media_paths
+                )
 
         total = result["by_age"] + result["by_limit"]
         if total > 0:
-            logger.info(f"[MessageRecorder] 已清理 {total} 条消息记录")
+            logger.info(
+                f"[MessageRecorder] 已清理 {total} 条消息记录，"
+                f"{result['media_files']} 个媒体文件"
+            )
 
         return result
 
@@ -209,10 +236,8 @@ class MessageRecorder(Star):
             message_obj = event.message_obj
             platform = self._get_platform_name(event)
 
-            # 标准化时间戳为毫秒级
             normalized_timestamp = self._normalize_timestamp(message_obj.timestamp)
 
-            # 构建消息记录
             record = MessageRecord(
                 platform=platform,
                 message_id=message_obj.message_id or "",
@@ -225,16 +250,17 @@ class MessageRecorder(Star):
                 timestamp=normalized_timestamp,
             )
 
-            # 可选保存消息链
             if self.config.get("save_message_chain", True):
                 message_chain = message_obj.message
                 if message_chain:
                     chain_data = []
                     for comp in message_chain:
-                        chain_data.append(self._serialize_component(comp))
+                        comp_data = self._serialize_component(comp)
+                        if self._media_downloader and self.config.get("save_media_files", False):
+                            await self._download_media_for_component(comp, comp_data)
+                        chain_data.append(comp_data)
                     record.message_chain = json.dumps(chain_data)
 
-            # 可选保存原始消息
             if self.config.get("save_raw_message", False):
                 raw_msg = message_obj.raw_message
                 if raw_msg:
@@ -243,10 +269,8 @@ class MessageRecorder(Star):
                     except (TypeError, ValueError):
                         record.raw_message = str(raw_msg)
 
-            # 保存到数据库
             record_id = await self._db.save_message(record)
 
-            # 消息内容摘要（用于调试）
             content_preview = (event.message_str[:30] + "...") if event.message_str and len(event.message_str) > 30 else (event.message_str or "[非文本]")
 
             logger.debug(
@@ -270,8 +294,10 @@ class MessageRecorder(Star):
         """序列化消息组件"""
         result = {"type": component.__class__.__name__}
 
-        # 常见组件属性
-        attrs = ["text", "url", "file_id", "file_unique_id", "width", "height"]
+        attrs = [
+            "text", "url", "file", "file_id", "file_unique_id",
+            "width", "height", "name", "path",
+        ]
         for attr in attrs:
             if hasattr(component, attr):
                 value = getattr(component, attr)
@@ -279,6 +305,49 @@ class MessageRecorder(Star):
                     result[attr] = value
 
         return result
+
+    async def _download_media_for_component(self, component, comp_data: dict):
+        """为消息组件下载多媒体文件"""
+        comp_type = comp_data.get("type", "")
+        if comp_type not in MEDIA_TYPE_MAP:
+            return
+
+        url = self._extract_media_url(component, comp_data)
+        if not url:
+            return
+
+        try:
+            filename = None
+            if comp_type == "File" and hasattr(component, "name") and component.name:
+                filename = component.name
+
+            local_path = await self._media_downloader.download_media(
+                url=url,
+                component_type=comp_type,
+                filename=filename,
+            )
+            if local_path:
+                comp_data["local_path"] = local_path
+        except Exception as e:
+            logger.warning(
+                f"[MessageRecorder] 下载多媒体文件失败 "
+                f"(type={comp_type}): {e}"
+            )
+
+    def _extract_media_url(self, component, comp_data: dict) -> Optional[str]:
+        """从消息组件中提取多媒体文件 URL"""
+        if hasattr(component, "url") and component.url:
+            return component.url
+
+        file_val = comp_data.get("file")
+        if isinstance(file_val, str) and file_val.startswith("http"):
+            return file_val
+
+        path_val = comp_data.get("path")
+        if isinstance(path_val, str) and path_val.startswith("http"):
+            return path_val
+
+        return None
 
     # ========== 管理指令 ==========
 

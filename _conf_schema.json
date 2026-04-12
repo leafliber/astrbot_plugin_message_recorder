@@ -34,5 +34,17 @@
     "description": "自动清理过期消息的间隔（小时）",
     "default": 24,
     "hint": "每隔指定小时数自动清理过期和超量记录"
+  },
+  "save_media_files": {
+    "type": "bool",
+    "description": "是否保存多媒体文件（图片、语音、视频、文件）到本地",
+    "default": false,
+    "hint": "开启后会下载消息中的多媒体文件。QQ 等平台的多媒体链接有有效期，建议开启以永久保存"
+  },
+  "image_save_mode": {
+    "type": "string",
+    "description": "图片保存模式：original 保存原图，thumbnail 保存缩略图",
+    "default": "original",
+    "hint": "original: 保存原图（体积大，画质高）；thumbnail: 保存缩略图（压缩后的小图，节省空间）"
   }
 }
