@@ -230,6 +230,10 @@ messages = await mr_api.search("关键词", group_id="123456", time="week")
 # 根据ID获取单条消息
 message = await mr_api.get_by_id(123)
 
+# 根据平台原始消息ID获取消息
+message = await mr_api.get_by_platform_message_id("12345678")
+message = await mr_api.get_by_platform_message_id("12345678", platform="telegram")
+
 # 获取消息上下文
 context_messages = await mr_api.get_context(message_id=123, before=5, after=5)
 # 返回 {"before": [...], "after": [...]}

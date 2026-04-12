@@ -274,6 +274,63 @@ class Database:
             )
         return None
 
+    async def get_message_by_platform_id(
+        self,
+        platform_message_id: str,
+        platform: Optional[str] = None
+    ) -> Optional[MessageRecord]:
+        """
+        根据平台原始消息 ID 获取消息
+
+        Args:
+            platform_message_id: 平台原始消息 ID
+            platform: 可选的平台名称，用于精确匹配
+
+        Returns:
+            消息记录（如有重复则返回时间戳最新的那一条），不存在则返回 None
+        """
+        if platform:
+            cursor = await self._db.execute("""
+                SELECT id, platform, message_id, session_id, group_id,
+                       sender_id, sender_name, message_type,
+                       message_str, message_chain, raw_message,
+                       timestamp, created_at
+                FROM messages
+                WHERE message_id = ? AND platform = ?
+                ORDER BY timestamp DESC
+                LIMIT 1
+            """, (platform_message_id, platform))
+        else:
+            cursor = await self._db.execute("""
+                SELECT id, platform, message_id, session_id, group_id,
+                       sender_id, sender_name, message_type,
+                       message_str, message_chain, raw_message,
+                       timestamp, created_at
+                FROM messages
+                WHERE message_id = ?
+                ORDER BY timestamp DESC
+                LIMIT 1
+            """, (platform_message_id,))
+        row = await cursor.fetchone()
+
+        if row:
+            return MessageRecord(
+                id=row[0],
+                platform=row[1],
+                message_id=row[2],
+                session_id=row[3],
+                group_id=row[4],
+                sender_id=row[5],
+                sender_name=row[6],
+                message_type=row[7],
+                message_str=row[8],
+                message_chain=row[9],
+                raw_message=row[10],
+                timestamp=row[11],
+                created_at=row[12],
+            )
+        return None
+
     async def get_context_messages(
         self,
         message_id: int,

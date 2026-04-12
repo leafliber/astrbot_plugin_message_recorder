@@ -341,6 +341,45 @@ class MessageRecorderAPI:
             logger.debug(f"[MessageRecorder] 消息 #{message_id} 不存在")
         return result
 
+    async def get_by_platform_message_id(
+        self,
+        platform_message_id: str,
+        platform: Optional[str] = None
+    ) -> Optional[MessageRecord]:
+        """
+        根据平台原始消息 ID 获取消息
+
+        Args:
+            platform_message_id: 平台原始消息 ID（如 Telegram/Discord 等平台的消息 ID）
+            platform: 可选的平台名称，用于精确匹配（推荐指定以提高查询准确性）
+
+        Returns:
+            消息记录，不存在则返回 None
+
+        Examples:
+            # 不指定平台（可能匹配多个平台的相同 message_id）
+            message = await mr_api.get_by_platform_message_id("12345678")
+
+            # 指定平台（推荐，更精确）
+            message = await mr_api.get_by_platform_message_id("12345678", platform="telegram")
+            message = await mr_api.get_by_platform_message_id("987654321", platform="discord")
+        """
+        logger.debug(
+            f"[MessageRecorder] API调用: get_by_platform_message_id({platform_message_id}, platform={platform})"
+        )
+        result = await self.db.get_message_by_platform_id(platform_message_id, platform)
+        if result:
+            logger.debug(
+                f"[MessageRecorder] 找到消息: platform_message_id={platform_message_id}, "
+                f"db_id={result.id}, platform={result.platform}"
+            )
+        else:
+            logger.debug(
+                f"[MessageRecorder] 消息不存在: platform_message_id={platform_message_id}, "
+                f"platform={platform}"
+            )
+        return result
+
     async def get_context(
         self,
         message_id: int,
