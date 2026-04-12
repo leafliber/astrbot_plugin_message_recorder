@@ -792,6 +792,20 @@ def create_blueprint(plugin_instance) -> Blueprint:
             logger.error(f"[MessageRecorder Web] 获取群组列表失败: {e}")
             return jsonify({"success": False, "error": str(e)}), 500
 
+    @bp.route("/api/media/<path:rel_path>")
+    async def api_media(rel_path: str):
+        """访问媒体文件"""
+        media_base = Path(get_astrbot_plugin_data_path()) / PLUGIN_DIR_NAME / "media"
+        file_path = media_base / rel_path
+
+        if not file_path.exists():
+            return jsonify({"success": False, "error": "文件不存在"}), 404
+
+        if not str(file_path.resolve()).startswith(str(media_base.resolve())):
+            return jsonify({"success": False, "error": "非法路径"}), 403
+
+        return await send_file(str(file_path))
+
     return bp
 
 
@@ -831,16 +845,21 @@ def format_message_detail(msg: MessageRecord) -> dict:
         "formatted_created_at": format_timestamp(msg.created_at) if msg.created_at else None
     })
 
-    # 解析消息链
     if msg.message_chain:
         try:
-            result["message_chain"] = json.loads(msg.message_chain)
+            chain = json.loads(msg.message_chain)
+            if isinstance(chain, list):
+                for comp in chain:
+                    if isinstance(comp, dict) and "local_path" in comp:
+                        lp = comp["local_path"]
+                        if isinstance(lp, str) and lp:
+                            comp["media_url"] = f"/message_recorder/api/media/{lp}"
+            result["message_chain"] = chain
         except json.JSONDecodeError:
             result["message_chain"] = None
     else:
         result["message_chain"] = None
 
-    # 解析原始消息
     if msg.raw_message:
         try:
             result["raw_message"] = json.loads(msg.raw_message)

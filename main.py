@@ -39,7 +39,6 @@ class MessageRecorder(Star):
         try:
             self._db = Database("astrbot_plugin_message_recorder")
             await self._db.init()
-            self._api = MessageRecorderAPI(self._db)
 
             if self.config.get("save_media_files", False):
                 image_save_mode = self.config.get("image_save_mode", "original")
@@ -51,6 +50,8 @@ class MessageRecorder(Star):
                     f"[MessageRecorder] 多媒体文件保存已启用，"
                     f"图片模式: {image_save_mode}"
                 )
+
+            self._api = MessageRecorderAPI(self._db, self._media_downloader)
 
             self._start_cleanup_task()
             await self._register_web_panel()

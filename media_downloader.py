@@ -110,18 +110,35 @@ class MediaDownloader:
                 content_type = resp.headers.get("Content-Type", "")
                 ext = self._determine_extension(url, content_type, component_type)
 
+                content_hash = hashlib.sha256(content).hexdigest()[:16]
+
+                if not filename:
+                    filename = f"{content_hash}{ext}"
+
                 date_dir = self._get_date_dir(media_subdir)
                 date_dir.mkdir(parents=True, exist_ok=True)
 
-                if not filename:
-                    url_hash = hashlib.md5(url.encode()).hexdigest()[:12]
-                    rand_suffix = os.urandom(4).hex()
-                    filename = f"{url_hash}_{rand_suffix}{ext}"
-
                 file_path = date_dir / filename
+
+                if file_path.exists():
+                    rel_path = file_path.relative_to(self.media_base_path)
+                    logger.debug(
+                        f"[MediaDownloader] 文件已存在，跳过保存: {rel_path}"
+                    )
+                    return str(rel_path)
 
                 if component_type == "Image" and self.image_save_mode == "thumbnail":
                     content = self._create_thumbnail(content)
+                    content_hash = hashlib.sha256(content).hexdigest()[:16]
+                    filename = f"{content_hash}{ext}"
+                    file_path = date_dir / filename
+
+                    if file_path.exists():
+                        rel_path = file_path.relative_to(self.media_base_path)
+                        logger.debug(
+                            f"[MediaDownloader] 缩略图已存在，跳过保存: {rel_path}"
+                        )
+                        return str(rel_path)
 
                 file_path.write_bytes(content)
 

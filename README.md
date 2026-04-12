@@ -332,9 +332,82 @@ data/plugin_data/astrbot_plugin_message_recorder/messages.db
 ```
 data/plugin_data/astrbot_plugin_message_recorder/media/
 ├── images/     # 图片
+│   └── 2026-04/   # 按年月分目录
 ├── records/    # 语音
 ├── videos/     # 视频
 └── files/      # 其他文件
+```
+
+**文件命名规则：**
+
+媒体文件使用**内容 SHA256 hash** 命名（取前16位），自动去重：
+- 相同内容的文件只保存一份
+- 避免重复下载和存储
+- 文件名示例：`a1b2c3d4e5f6g7h8.jpg`
+
+---
+
+## 🖼️ 媒体文件 API
+
+### 其他插件获取媒体文件
+
+```python
+mr_api = await get_message_recorder_api(context)
+
+# 查询消息
+messages = await mr_api.query(limit=10)
+
+for msg in messages:
+    # 从消息中提取媒体文件路径
+    media_paths = mr_api.extract_media_paths(msg)
+    
+    for rel_path in media_paths:
+        # 获取绝对路径（文件不存在返回 None）
+        abs_path = mr_api.get_media_absolute_path(rel_path)
+        if abs_path:
+            with open(abs_path, "rb") as f:
+                image_data = f.read()
+        
+        # 获取 Web 访问 URL
+        web_url = mr_api.get_media_url(rel_path)
+        # 返回: /message_recorder/api/media/images/2026-04/abc123.jpg
+```
+
+### 媒体相关 API 方法
+
+| 方法 | 说明 |
+|------|------|
+| `get_media_base_path()` | 获取媒体文件存储根目录的绝对路径 |
+| `get_media_absolute_path(rel_path)` | 获取媒体文件的绝对路径（文件不存在返回 None） |
+| `get_media_url(rel_path)` | 获取媒体文件的 Web 访问 URL |
+| `extract_media_paths(message)` | 从消息记录中提取所有媒体文件的相对路径 |
+
+### Web API 访问媒体
+
+媒体文件可通过 HTTP API 直接访问：
+
+```
+GET /message_recorder/api/media/{relative_path}
+```
+
+示例：
+```
+GET /message_recorder/api/media/images/2026-04/a1b2c3d4e5f6g7h8.jpg
+```
+
+消息详情 API 返回的 `message_chain` 中会自动包含 `media_url` 字段：
+
+```json
+{
+  "message_chain": [
+    {
+      "type": "Image",
+      "url": "https://example.com/image.jpg",
+      "local_path": "images/2026-04/a1b2c3d4e5f6g7h8.jpg",
+      "media_url": "/message_recorder/api/media/images/2026-04/a1b2c3d4e5f6g7h8.jpg"
+    }
+  ]
+}
 ```
 
 ---

@@ -1,11 +1,17 @@
 """对外暴露的 API 接口，供其他插件调用"""
 
+from pathlib import Path
 from typing import Optional, List, Dict
 
 from astrbot.api import logger
+from astrbot.core.utils.astrbot_path import get_astrbot_plugin_data_path
 
 from .database import Database
 from .models import MessageRecord, QueryFilter, MessageStats
+from .media_downloader import MediaDownloader
+
+
+PLUGIN_DIR_NAME = "astrbot_plugin_message_recorder"
 
 
 class MessageRecorderAPI:
@@ -16,8 +22,77 @@ class MessageRecorderAPI:
     同时提供常用场景的快捷方法。
     """
 
-    def __init__(self, database: Database):
+    def __init__(self, database: Database, media_downloader: Optional[MediaDownloader] = None):
         self.db = database
+        self._media_downloader = media_downloader
+
+    @staticmethod
+    def get_media_base_path() -> Path:
+        """获取媒体文件存储根目录的绝对路径"""
+        return Path(get_astrbot_plugin_data_path()) / PLUGIN_DIR_NAME / "media"
+
+    def get_media_absolute_path(self, relative_path: str) -> Optional[Path]:
+        """
+        获取媒体文件的绝对路径
+
+        Args:
+            relative_path: 相对路径（如 "images/2026-04/abc123.jpg"）
+
+        Returns:
+            文件绝对路径，文件不存在则返回 None
+
+        Examples:
+            api = plugin.get_api()
+            abs_path = api.get_media_absolute_path("images/2026-04/abc123.jpg")
+            if abs_path:
+                with open(abs_path, "rb") as f:
+                    image_data = f.read()
+        """
+        if not relative_path:
+            return None
+        media_base = self.get_media_base_path()
+        file_path = media_base / relative_path
+        if file_path.exists() and file_path.is_file():
+            return file_path
+        return None
+
+    def get_media_url(self, relative_path: str) -> str:
+        """
+        获取媒体文件的 Web 访问 URL
+
+        Args:
+            relative_path: 相对路径（如 "images/2026-04/abc123.jpg"）
+
+        Returns:
+            Web URL（如 "/message_recorder/api/media/images/2026-04/abc123.jpg"）
+
+        Examples:
+            api = plugin.get_api()
+            url = api.get_media_url("images/2026-04/abc123.jpg")
+        """
+        if not relative_path:
+            return ""
+        return f"/message_recorder/api/media/{relative_path}"
+
+    def extract_media_paths(self, message: MessageRecord) -> List[str]:
+        """
+        从消息记录中提取所有媒体文件的相对路径
+
+        Args:
+            message: 消息记录对象
+
+        Returns:
+            媒体文件相对路径列表
+
+        Examples:
+            api = plugin.get_api()
+            messages = await api.query(limit=10)
+            for msg in messages:
+                paths = api.extract_media_paths(msg)
+                for path in paths:
+                    abs_path = api.get_media_absolute_path(path)
+        """
+        return MediaDownloader.extract_media_paths(message.message_chain)
 
     # ========== 核心查询方法 ==========
 
