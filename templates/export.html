@@ -88,6 +88,13 @@
         <input type="checkbox" id="includeRaw">
         包含原始消息数据
       </label>
+      <label style="display: flex; align-items: center; gap: 0.5rem;">
+        <input type="checkbox" id="includeMedia">
+        包含多媒体文件（图片、语音、视频等）
+      </label>
+    </div>
+    <div id="mediaNote" style="display: none; margin-top: 0.5rem; padding: 0.5rem; background: var(--bg-secondary, #f0f0f0); border-radius: 4px; font-size: 0.85rem; color: var(--text-secondary, #666);">
+      💡 勾选后将以 <code>.mrpkg</code> 格式导出（包含数据 + 媒体文件的压缩包），文件体积可能较大。仅 JSON 格式支持此选项。
     </div>
   </div>
 

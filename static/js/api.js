@@ -10,10 +10,13 @@ class MessageRecorderAPI {
 
   async request(url, options = {}) {
     const fullUrl = url.startsWith('http') ? url : this.baseUrl + url;
-    options.headers = {
-      'Content-Type': 'application/json',
-      ...options.headers
-    };
+    if (!options.skipContentType) {
+      options.headers = {
+        'Content-Type': 'application/json',
+        ...options.headers
+      };
+    }
+    delete options.skipContentType;
 
     try {
       const response = await fetch(fullUrl, options);
@@ -115,12 +118,39 @@ class MessageRecorderAPI {
     return this.request('/import', {
       method: 'POST',
       body: formData,
-      headers: {} // 不设置 Content-Type，让浏览器自动设置
+      skipContentType: true
     });
   }
 
   async getImportStatus(taskId) {
     return this.request(`/import/status/${taskId}`);
+  }
+
+  async initChunkUpload(filename, fileSize, mode = 'merge') {
+    return this.request('/import/chunk/init', {
+      method: 'POST',
+      body: JSON.stringify({ filename, file_size: fileSize, mode })
+    });
+  }
+
+  async uploadChunk(sessionId, chunkIndex, chunkData) {
+    const formData = new FormData();
+    formData.append('session_id', sessionId);
+    formData.append('chunk_index', chunkIndex);
+    formData.append('chunk', chunkData);
+
+    return this.request('/import/chunk/upload', {
+      method: 'POST',
+      body: formData,
+      skipContentType: true
+    });
+  }
+
+  async completeChunkUpload(sessionId) {
+    return this.request('/import/chunk/complete', {
+      method: 'POST',
+      body: JSON.stringify({ session_id: sessionId })
+    });
   }
 
   // ========== 元数据 API ==========

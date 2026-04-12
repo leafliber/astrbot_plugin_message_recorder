@@ -2,10 +2,13 @@
 
 import os
 import asyncio
+import shutil
+import tempfile
 import uuid
 import time
 import json
 import csv
+import zipfile
 from pathlib import Path
 from typing import Dict, Any, Optional, List
 from datetime import datetime
@@ -18,15 +21,20 @@ from astrbot.core.utils.astrbot_path import get_astrbot_plugin_path, get_astrbot
 from ..database import Database
 from ..models import QueryFilter, MessageRecord
 from ..time_utils import parse_time_range
+from ..media_downloader import MediaDownloader
 
 
 # 安全配置
-MAX_IMPORT_FILE_SIZE = 10 * 1024 * 1024  # 10MB
+MAX_IMPORT_FILE_SIZE = 4 * 1024 * 1024 * 1024  # 4GB
 MAX_EXPORT_FILE_AGE = 3600  # 导出文件有效期 1 小时
-ALLOWED_IMPORT_EXTENSIONS = {".json", ".csv"}  # 允许的导入文件扩展名
+ALLOWED_IMPORT_EXTENSIONS = {".json", ".csv", ".mrpkg"}
+CHUNK_SIZE = 5 * 1024 * 1024  # 分片大小 5MB
 
 # 导出任务存储
 _export_tasks: Dict[str, Dict[str, Any]] = {}
+
+# 分片上传会话存储
+_chunk_sessions: Dict[str, Dict[str, Any]] = {}
 _import_tasks: Dict[str, Dict[str, Any]] = {}
 
 # 插件目录名
@@ -446,9 +454,8 @@ def create_blueprint(plugin_instance) -> Blueprint:
         if not file_path or not os.path.exists(file_path):
             return jsonify({"success": False, "error": "文件不存在"}), 404
 
-        # 根据格式设置文件名
-        format_type = task["format"]
-        filename = f"message_export_{task_id}.{format_type}"
+        actual_ext = Path(file_path).suffix.lstrip(".")
+        filename = f"message_export_{task_id}.{actual_ext}"
 
         return await send_file(file_path, as_attachment=True, attachment_filename=filename)
 
@@ -485,7 +492,7 @@ def create_blueprint(plugin_instance) -> Blueprint:
             if file_ext not in ALLOWED_IMPORT_EXTENSIONS:
                 return jsonify({
                     "success": False,
-                    "error": f"不支持的文件格式，仅支持 JSON 和 CSV"
+                    "error": f"不支持的文件格式，仅支持 JSON、CSV 和 MRPKG"
                 }), 400
 
             # 创建任务 ID
@@ -554,6 +561,183 @@ def create_blueprint(plugin_instance) -> Blueprint:
             "success": True,
             "data": task
         })
+
+    # ========== 分片上传 API ==========
+
+    @bp.route("/api/import/chunk/init", methods=["POST"])
+    async def api_chunk_init():
+        """初始化分片上传会话"""
+        if not db:
+            return jsonify({"success": False, "error": "数据库未初始化"}), 500
+
+        try:
+            data = await request.get_json()
+            filename = data.get("filename", "")
+            file_size = data.get("file_size", 0)
+            mode = data.get("mode", "merge")
+
+            if file_size > MAX_IMPORT_FILE_SIZE:
+                max_gb = MAX_IMPORT_FILE_SIZE // (1024 * 1024 * 1024)
+                return jsonify({
+                    "success": False,
+                    "error": f"文件大小超过限制（最大 {max_gb}GB）"
+                }), 400
+
+            safe_filename = Path(filename).name
+            file_ext = Path(safe_filename).suffix.lower()
+            if file_ext not in ALLOWED_IMPORT_EXTENSIONS:
+                return jsonify({
+                    "success": False,
+                    "error": "不支持的文件格式，仅支持 JSON、CSV 和 MRPKG"
+                }), 400
+
+            session_id = f"chunk_{uuid.uuid4().hex[:12]}"
+            total_chunks = (file_size + CHUNK_SIZE - 1) // CHUNK_SIZE if file_size > 0 else 1
+
+            temp_dir = get_plugin_data_dir() / "temp" / "chunks"
+            temp_dir.mkdir(parents=True, exist_ok=True)
+            chunks_dir = temp_dir / session_id
+            chunks_dir.mkdir(parents=True, exist_ok=True)
+
+            _chunk_sessions[session_id] = {
+                "filename": safe_filename,
+                "file_size": file_size,
+                "file_ext": file_ext,
+                "mode": mode,
+                "total_chunks": total_chunks,
+                "uploaded_chunks": [],
+                "chunks_dir": str(chunks_dir),
+                "created_at": time.time(),
+            }
+
+            return jsonify({
+                "success": True,
+                "data": {
+                    "session_id": session_id,
+                    "total_chunks": total_chunks,
+                    "chunk_size": CHUNK_SIZE,
+                }
+            })
+        except Exception as e:
+            logger.error(f"[MessageRecorder Web] 初始化分片上传失败: {e}")
+            return jsonify({"success": False, "error": str(e)}), 500
+
+    @bp.route("/api/import/chunk/upload", methods=["POST"])
+    async def api_chunk_upload():
+        """上传单个分片"""
+        try:
+            files = await request.files
+            if "chunk" not in files:
+                return jsonify({"success": False, "error": "缺少分片数据"}), 400
+
+            session_id = request.form.get("session_id", "")
+            chunk_index = int(request.form.get("chunk_index", -1))
+
+            session = _chunk_sessions.get(session_id)
+            if not session:
+                return jsonify({"success": False, "error": "上传会话不存在或已过期"}), 404
+
+            if chunk_index < 0 or chunk_index >= session["total_chunks"]:
+                return jsonify({"success": False, "error": "无效的分片索引"}), 400
+
+            chunk_file = files["chunk"]
+            chunk_path = Path(session["chunks_dir"]) / f"{chunk_index:06d}"
+            await chunk_file.save(str(chunk_path))
+
+            if chunk_index not in session["uploaded_chunks"]:
+                session["uploaded_chunks"].append(chunk_index)
+
+            return jsonify({
+                "success": True,
+                "data": {
+                    "session_id": session_id,
+                    "chunk_index": chunk_index,
+                    "uploaded_count": len(session["uploaded_chunks"]),
+                    "total_chunks": session["total_chunks"],
+                }
+            })
+        except Exception as e:
+            logger.error(f"[MessageRecorder Web] 上传分片失败: {e}")
+            return jsonify({"success": False, "error": str(e)}), 500
+
+    @bp.route("/api/import/chunk/complete", methods=["POST"])
+    async def api_chunk_complete():
+        """完成分片上传，组装文件并开始导入"""
+        if not db:
+            return jsonify({"success": False, "error": "数据库未初始化"}), 500
+
+        try:
+            data = await request.get_json()
+            session_id = data.get("session_id", "")
+
+            session = _chunk_sessions.get(session_id)
+            if not session:
+                return jsonify({"success": False, "error": "上传会话不存在或已过期"}), 404
+
+            if len(session["uploaded_chunks"]) < session["total_chunks"]:
+                missing = set(range(session["total_chunks"])) - set(session["uploaded_chunks"])
+                return jsonify({
+                    "success": False,
+                    "error": f"尚有 {len(missing)} 个分片未上传"
+                }), 400
+
+            task_id = f"import_{uuid.uuid4().hex[:12]}"
+            temp_dir = get_plugin_data_dir() / "temp"
+            temp_dir.mkdir(parents=True, exist_ok=True)
+            assembled_file = temp_dir / f"{task_id}{session['file_ext']}"
+
+            with open(assembled_file, "wb") as dst:
+                for i in range(session["total_chunks"]):
+                    chunk_path = Path(session["chunks_dir"]) / f"{i:06d}"
+                    if chunk_path.exists():
+                        with open(chunk_path, "rb") as src:
+                            shutil.copyfileobj(src, dst)
+
+            shutil.rmtree(session["chunks_dir"], ignore_errors=True)
+            _chunk_sessions.pop(session_id, None)
+
+            actual_size = assembled_file.stat().st_size
+            if actual_size > MAX_IMPORT_FILE_SIZE:
+                assembled_file.unlink()
+                max_gb = MAX_IMPORT_FILE_SIZE // (1024 * 1024 * 1024)
+                return jsonify({
+                    "success": False,
+                    "error": f"文件大小超过限制（最大 {max_gb}GB）"
+                }), 400
+
+            _import_tasks[task_id] = {
+                "status": "pending",
+                "mode": session["mode"],
+                "filename": session["filename"],
+                "file_path": str(assembled_file),
+                "created_at": time.time(),
+                "total_records": 0,
+                "processed": 0,
+                "imported": 0,
+                "skipped": 0,
+                "errors": 0,
+                "media_restored": 0,
+                "completed_at": None,
+                "error": None
+            }
+
+            asyncio.create_task(
+                execute_import_task(task_id, db, str(assembled_file), session["mode"])
+            )
+
+            return jsonify({
+                "success": True,
+                "data": {
+                    "task_id": task_id,
+                    "status": "pending",
+                    "filename": session["filename"],
+                    "mode": session["mode"],
+                    "file_size": actual_size,
+                }
+            })
+        except Exception as e:
+            logger.error(f"[MessageRecorder Web] 完成分片上传失败: {e}")
+            return jsonify({"success": False, "error": str(e)}), 500
 
     # ========== 元数据 API ==========
 
@@ -777,21 +961,21 @@ async def execute_export_task(task_id: str, db: Database, query_filter: QueryFil
     try:
         task["status"] = "processing"
 
-        # 获取导出数据
         messages = await db.query_messages(query_filter)
 
-        # 导出目录
-        plugin_path = Path(db.plugin_name)
         export_dir = Path("/tmp") / "message_recorder_exports"
         export_dir.mkdir(parents=True, exist_ok=True)
 
-        # 生成导出文件
-        file_path = export_dir / f"{task_id}.{format_type}"
-
         include_chain = options.get("include_chain", True)
         include_raw = options.get("include_raw", False)
+        include_media = options.get("include_media", False)
 
-        if format_type == "json":
+        if include_media and format_type == "json":
+            file_path = await _export_with_media(
+                task_id, db, messages, export_dir,
+                include_chain, include_raw, task,
+            )
+        elif format_type == "json":
             export_data = {
                 "export_info": {
                     "plugin": "astrbot_plugin_message_recorder",
@@ -811,18 +995,18 @@ async def execute_export_task(task_id: str, db: Database, query_filter: QueryFil
                     msg_dict.pop("raw_message", None)
                 export_data["messages"].append(msg_dict)
 
+            file_path = export_dir / f"{task_id}.{format_type}"
             with open(file_path, "w", encoding="utf-8") as f:
                 json.dump(export_data, f, ensure_ascii=False, indent=2)
 
         elif format_type == "csv":
+            file_path = export_dir / f"{task_id}.{format_type}"
             with open(file_path, "w", encoding="utf-8", newline="") as f:
                 writer = csv.writer(f)
-                # 写入表头
                 writer.writerow([
                     "id", "platform", "sender_id", "sender_name", "group_id",
                     "message_type", "message_str", "timestamp", "created_at"
                 ])
-                # 写入数据
                 for msg in messages:
                     writer.writerow([
                         msg.id, msg.platform, msg.sender_id, msg.sender_name or "",
@@ -831,6 +1015,7 @@ async def execute_export_task(task_id: str, db: Database, query_filter: QueryFil
                     ])
 
         elif format_type == "txt":
+            file_path = export_dir / f"{task_id}.{format_type}"
             with open(file_path, "w", encoding="utf-8") as f:
                 f.write("=== 导出信息 ===\n")
                 f.write(f"插件: astrbot_plugin_message_recorder\n")
@@ -846,8 +1031,9 @@ async def execute_export_task(task_id: str, db: Database, query_filter: QueryFil
                     platform_icon = get_platform_icon(msg.platform)
 
                     f.write(f"[{time_str}] {platform_icon} {group_info} {sender}: {content}\n")
+        else:
+            file_path = export_dir / f"{task_id}.{format_type}"
 
-        # 更新任务状态
         task["status"] = "completed"
         task["file_path"] = str(file_path)
         task["completed_at"] = time.time()
@@ -860,6 +1046,76 @@ async def execute_export_task(task_id: str, db: Database, query_filter: QueryFil
         task["status"] = "failed"
         task["error"] = str(e)
         task["completed_at"] = time.time()
+
+
+async def _export_with_media(
+    task_id: str,
+    db: Database,
+    messages: list,
+    export_dir: Path,
+    include_chain: bool,
+    include_raw: bool,
+    task: dict,
+) -> Path:
+    """导出为包含媒体文件的 .mrpkg (zip) 包"""
+    media_base = Path(get_astrbot_plugin_data_path()) / PLUGIN_DIR_NAME / "media"
+
+    export_data = {
+        "export_info": {
+            "plugin": "astrbot_plugin_message_recorder",
+            "version": "1.0.0",
+            "export_time": int(time.time() * 1000),
+            "filters": task["filter"],
+            "total_records": len(messages),
+            "include_media": True,
+        },
+        "messages": [],
+    }
+
+    media_files_collected: List[str] = []
+
+    for msg in messages:
+        msg_dict = format_message_detail(msg) if include_chain or include_raw else format_message(msg)
+        if not include_chain:
+            msg_dict.pop("message_chain", None)
+        if not include_raw:
+            msg_dict.pop("raw_message", None)
+
+        if include_chain and msg.message_chain:
+            try:
+                chain = json.loads(msg.message_chain)
+                if isinstance(chain, list):
+                    for comp in chain:
+                        if isinstance(comp, dict) and "local_path" in comp:
+                            lp = comp["local_path"]
+                            if isinstance(lp, str) and lp:
+                                media_files_collected.append(lp)
+            except (json.JSONDecodeError, TypeError):
+                pass
+
+        export_data["messages"].append(msg_dict)
+
+    pkg_path = export_dir / f"{task_id}.mrpkg"
+
+    with zipfile.ZipFile(pkg_path, "w", zipfile.ZIP_DEFLATED) as zf:
+        zf.writestr("data.json", json.dumps(export_data, ensure_ascii=False, indent=2))
+
+        for rel_path in media_files_collected:
+            abs_path = media_base / rel_path
+            if abs_path.exists() and abs_path.is_file():
+                try:
+                    zf.write(abs_path, f"media/{rel_path}")
+                except Exception as e:
+                    logger.warning(
+                        f"[MessageRecorder Web] 打包媒体文件失败 {rel_path}: {e}"
+                    )
+
+    task["media_count"] = len(media_files_collected)
+    logger.info(
+        f"[MessageRecorder Web] 导出含媒体包，共 {len(media_files_collected)} 个媒体文件"
+    )
+
+    return pkg_path
 
 
 def normalize_timestamp(ts: Any) -> int:
@@ -900,24 +1156,23 @@ async def execute_import_task(task_id: str, db: Database, file_path: str, mode: 
     try:
         task["status"] = "processing"
 
-        # 解析文件
         records = []
         file_ext = Path(file_path).suffix.lower()
+        media_restored = 0
 
-        if file_ext == ".json":
+        if file_ext == ".mrpkg":
+            records, media_restored = await _import_mrpkg(file_path)
+        elif file_ext == ".json":
             with open(file_path, encoding="utf-8") as f:
                 data = json.load(f)
-                # 支持 export_info 格式和直接数组格式
                 if isinstance(data, dict) and "messages" in data:
                     records = data["messages"]
                 elif isinstance(data, list):
                     records = data
-
         elif file_ext == ".csv":
             with open(file_path, encoding="utf-8", newline="") as f:
                 reader = csv.DictReader(f)
                 records = list(reader)
-
         else:
             task["status"] = "failed"
             task["error"] = "不支持的文件格式"
@@ -925,14 +1180,11 @@ async def execute_import_task(task_id: str, db: Database, file_path: str, mode: 
 
         task["total_records"] = len(records)
 
-        # 处理模式
         if mode == "replace":
-            # 清空现有数据（这里不实现，风险太大）
             task["error"] = "replace 模式暂不支持"
             task["status"] = "failed"
             return
 
-        # 批量导入
         imported = 0
         skipped = 0
         errors = 0
@@ -941,11 +1193,9 @@ async def execute_import_task(task_id: str, db: Database, file_path: str, mode: 
             task["processed"] = i + 1
 
             try:
-                # 标准化时间戳
                 normalized_timestamp = normalize_timestamp(record.get("timestamp"))
                 normalized_created_at = normalize_timestamp(record.get("created_at"))
 
-                # 构建 MessageRecord
                 msg_record = MessageRecord(
                     platform=record.get("platform", "unknown"),
                     message_id=record.get("message_id", ""),
@@ -961,9 +1211,7 @@ async def execute_import_task(task_id: str, db: Database, file_path: str, mode: 
                     created_at=normalized_created_at
                 )
 
-                # 检查是否已存在（基于 message_id 或 timestamp + sender_id）
                 if mode == "skip_duplicates" or mode == "merge":
-                    # 暂时直接插入
                     await db.save_message(msg_record)
                     imported += 1
 
@@ -971,26 +1219,74 @@ async def execute_import_task(task_id: str, db: Database, file_path: str, mode: 
                 errors += 1
                 logger.debug(f"[MessageRecorder Web] 导入记录失败: {e}")
 
-        # 更新任务状态
         task["status"] = "completed"
         task["imported"] = imported
         task["skipped"] = skipped
         task["errors"] = errors
+        task["media_restored"] = media_restored
         task["completed_at"] = time.time()
 
-        # 清理临时文件
         try:
             os.remove(file_path)
         except:
             pass
 
-        logger.info(f"[MessageRecorder Web] 导入任务 {task_id} 完成: 导入 {imported}, 跳过 {skipped}, 错误 {errors}")
+        logger.info(
+            f"[MessageRecorder Web] 导入任务 {task_id} 完成: "
+            f"导入 {imported}, 跳过 {skipped}, 错误 {errors}, "
+            f"媒体文件 {media_restored}"
+        )
 
     except Exception as e:
         logger.error(f"[MessageRecorder Web] 导入任务 {task_id} 失败: {e}")
         task["status"] = "failed"
         task["error"] = str(e)
         task["completed_at"] = time.time()
+
+
+async def _import_mrpkg(file_path: str) -> tuple:
+    """从 .mrpkg 包导入数据和媒体文件，返回 (records, media_restored_count)"""
+    media_base = Path(get_astrbot_plugin_data_path()) / PLUGIN_DIR_NAME / "media"
+    records = []
+    media_restored = 0
+
+    with zipfile.ZipFile(file_path, "r") as zf:
+        if "data.json" not in zf.namelist():
+            raise ValueError("无效的 .mrpkg 包：缺少 data.json")
+
+        with zf.open("data.json") as f:
+            data = json.loads(f.read().decode("utf-8"))
+
+        if isinstance(data, dict) and "messages" in data:
+            records = data["messages"]
+        elif isinstance(data, list):
+            records = data
+
+        for name in zf.namelist():
+            if not name.startswith("media/"):
+                continue
+
+            rel_path = name[len("media/"):]
+            if not rel_path:
+                continue
+
+            target_path = media_base / rel_path
+            target_path.parent.mkdir(parents=True, exist_ok=True)
+
+            try:
+                with zf.open(name) as src, open(target_path, "wb") as dst:
+                    shutil.copyfileobj(src, dst)
+                media_restored += 1
+            except Exception as e:
+                logger.warning(
+                    f"[MessageRecorder Web] 恢复媒体文件失败 {rel_path}: {e}"
+                )
+
+    logger.info(
+        f"[MessageRecorder Web] 从 .mrpkg 恢复了 {media_restored} 个媒体文件"
+    )
+
+    return records, media_restored
 
 
 def get_platform_icon(platform: str) -> str:

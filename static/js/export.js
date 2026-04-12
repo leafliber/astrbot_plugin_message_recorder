@@ -163,12 +163,35 @@ function bindExportButton() {
   if (exportBtn) {
     exportBtn.addEventListener('click', startExport);
   }
+
+  const includeMediaCheckbox = document.getElementById('includeMedia');
+  const mediaNote = document.getElementById('mediaNote');
+  if (includeMediaCheckbox && mediaNote) {
+    includeMediaCheckbox.addEventListener('change', () => {
+      mediaNote.style.display = includeMediaCheckbox.checked ? 'block' : 'none';
+      if (includeMediaCheckbox.checked && selectedFormat !== 'json') {
+        selectedFormat = 'json';
+        const formatOptions = document.querySelectorAll('.format-option');
+        formatOptions.forEach(o => o.classList.remove('selected'));
+        const jsonOption = document.querySelector('.format-option[data-format="json"]');
+        if (jsonOption) jsonOption.classList.add('selected');
+      }
+    });
+  }
 }
 
 async function startExport() {
+  const includeMedia = document.getElementById('includeMedia')?.checked ?? false;
+
+  if (includeMedia && selectedFormat !== 'json') {
+    alert('包含多媒体文件选项仅支持 JSON 格式导出');
+    return;
+  }
+
   const options = {
     include_chain: document.getElementById('includeChain')?.checked ?? true,
-    include_raw: document.getElementById('includeRaw')?.checked ?? false
+    include_raw: document.getElementById('includeRaw')?.checked ?? false,
+    include_media: includeMedia
   };
 
   showLoading();
@@ -180,7 +203,6 @@ async function startExport() {
     return;
   }
 
-  // 显示任务进度
   showExportProgress(result.data);
 }
 
@@ -312,28 +334,29 @@ function handleFileSelect(file) {
   const fileInfo = document.getElementById('fileInfo');
   if (!fileInfo) return;
 
-  // 检查文件格式
-  const validFormats = ['.json', '.csv'];
+  const validFormats = ['.json', '.csv', '.mrpkg'];
   const fileExt = file.name.substring(file.name.lastIndexOf('.')).toLowerCase();
   if (!validFormats.includes(fileExt)) {
-    alert('请选择 JSON 或 CSV 格式的文件');
+    alert('请选择 JSON、CSV 或 MRPKG 格式的文件');
     return;
   }
 
   fileInfo.style.display = 'block';
+  const formatLabel = fileExt === '.mrpkg' ? 'MRPKG（含媒体文件包）' : fileExt.toUpperCase().slice(1);
   fileInfo.innerHTML = `
     <p>已选择文件: <strong>${file.name}</strong></p>
     <p>文件大小: ${formatFileSize(file.size)}</p>
+    <p>格式: ${formatLabel}</p>
   `;
 
-  // 存储文件引用
   window.selectedImportFile = file;
 }
 
 function formatFileSize(size) {
   if (size < 1024) return size + ' B';
   if (size < 1024 * 1024) return (size / 1024).toFixed(1) + ' KB';
-  return (size / (1024 * 1024)).toFixed(1) + ' MB';
+  if (size < 1024 * 1024 * 1024) return (size / (1024 * 1024)).toFixed(1) + ' MB';
+  return (size / (1024 * 1024 * 1024)).toFixed(2) + ' GB';
 }
 
 function bindImportModeSelection() {
@@ -352,14 +375,27 @@ function bindImportButton() {
   }
 }
 
+const CHUNK_THRESHOLD = 50 * 1024 * 1024;
+const CHUNK_SIZE = 5 * 1024 * 1024;
+
 async function startImport() {
   if (!window.selectedImportFile) {
     alert('请先选择要导入的文件');
     return;
   }
 
+  const file = window.selectedImportFile;
+
+  if (file.size > CHUNK_THRESHOLD) {
+    await startChunkedImport(file);
+  } else {
+    await startSimpleImport(file);
+  }
+}
+
+async function startSimpleImport(file) {
   showLoading();
-  const result = await api.createImport(window.selectedImportFile, selectedImportMode);
+  const result = await api.createImport(file, selectedImportMode);
   hideLoading();
 
   if (!result.success) {
@@ -367,8 +403,71 @@ async function startImport() {
     return;
   }
 
-  // 显示任务进度
   showImportProgress(result.data);
+}
+
+async function startChunkedImport(file) {
+  const initResult = await api.initChunkUpload(file.name, file.size, selectedImportMode);
+  if (!initResult.success) {
+    alert('初始化分片上传失败: ' + initResult.error);
+    return;
+  }
+
+  const { session_id, total_chunks } = initResult.data;
+
+  showChunkUploadProgress(file.name, total_chunks);
+
+  let uploadedCount = 0;
+
+  for (let i = 0; i < total_chunks; i++) {
+    const start = i * CHUNK_SIZE;
+    const end = Math.min(start + CHUNK_SIZE, file.size);
+    const chunkBlob = file.slice(start, end);
+
+    const chunkResult = await api.uploadChunk(session_id, i, chunkBlob);
+
+    if (!chunkResult.success) {
+      alert(`上传分片 ${i + 1}/${total_chunks} 失败: ${chunkResult.error}`);
+      return;
+    }
+
+    uploadedCount++;
+    updateChunkUploadProgress(uploadedCount, total_chunks);
+  }
+
+  const completeResult = await api.completeChunkUpload(session_id);
+  if (!completeResult.success) {
+    alert('完成上传失败: ' + completeResult.error);
+    return;
+  }
+
+  showImportProgress(completeResult.data);
+}
+
+function showChunkUploadProgress(filename, totalChunks) {
+  const container = document.getElementById('importProgress');
+  if (!container) return;
+
+  container.style.display = 'block';
+  container.innerHTML = `
+    <div class="card">
+      <h3>上传文件: ${filename}</h3>
+      <p>使用分片上传，共 ${totalChunks} 个分片</p>
+      <div class="task-progress" style="margin: 1rem 0;">
+        <div class="progress-bar" id="chunkProgressBar" style="width: 0%; transition: width 0.3s ease;"></div>
+      </div>
+      <p id="chunkProgressText">已上传: 0 / ${totalChunks} 分片 (0%)</p>
+    </div>
+  `;
+}
+
+function updateChunkUploadProgress(uploaded, total) {
+  const bar = document.getElementById('chunkProgressBar');
+  const text = document.getElementById('chunkProgressText');
+  const percent = Math.round((uploaded / total) * 100);
+
+  if (bar) bar.style.width = percent + '%';
+  if (text) text.textContent = `已上传: ${uploaded} / ${total} 分片 (${percent}%)`;
 }
 
 function showImportProgress(task) {
@@ -398,6 +497,10 @@ function showImportProgress(task) {
           <div class="task-stat-value" id="importErrors">0</div>
           <div class="task-stat-label">错误</div>
         </div>
+        <div class="task-stat">
+          <div class="task-stat-value" id="importMediaRestored">0</div>
+          <div class="task-stat-label">媒体文件</div>
+        </div>
       </div>
       <div class="task-progress">
         <div class="progress-bar" id="importProgressBar" style="width: 0%"></div>
@@ -417,6 +520,7 @@ async function pollImportStatus(taskId) {
   const importedEl = document.getElementById('importImported');
   const skippedEl = document.getElementById('importSkipped');
   const errorsEl = document.getElementById('importErrors');
+  const mediaRestoredEl = document.getElementById('importMediaRestored');
 
   let status = 'pending';
   while (status !== 'completed' && status !== 'failed') {
@@ -438,13 +542,12 @@ async function pollImportStatus(taskId) {
       statusEl.textContent = statusText[status] || status;
     }
 
-    // 更新统计数据
     if (processedEl) processedEl.textContent = task.processed || 0;
     if (importedEl) importedEl.textContent = task.imported || 0;
     if (skippedEl) skippedEl.textContent = task.skipped || 0;
     if (errorsEl) errorsEl.textContent = task.errors || 0;
+    if (mediaRestoredEl) mediaRestoredEl.textContent = task.media_restored || 0;
 
-    // 更新进度条
     if (progressEl && task.total_records > 0) {
       const percent = Math.round((task.processed / task.total_records) * 100);
       progressEl.style.width = percent + '%';

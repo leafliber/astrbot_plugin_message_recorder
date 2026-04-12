@@ -8,13 +8,13 @@
   "max_records": {
     "type": "int",
     "description": "最大消息记录数，超过时自动清理最旧的记录",
-    "default": 100000,
+    "default": 0,
     "hint": "设置为 0 表示不限制记录数量（可能占用大量磁盘空间）"
   },
   "retention_days": {
     "type": "int",
     "description": "消息保留天数",
-    "default": 30,
+    "default": 0,
     "hint": "超过此天数的消息将被自动清理，设置为 0 表示永久保留"
   },
   "save_message_chain": {
@@ -39,7 +39,7 @@
     "type": "bool",
     "description": "是否保存多媒体文件（图片、语音、视频、文件）到本地",
     "default": false,
-    "hint": "开启后会下载消息中的多媒体文件。QQ 等平台的多媒体链接有有效期，建议开启以永久保存"
+    "hint": "开启后会下载消息中的多媒体文件，需要打开“保存完整消息链”选项。QQ 等平台的多媒体链接有有效期，建议开启以永久保存"
   },
   "image_save_mode": {
     "type": "string",

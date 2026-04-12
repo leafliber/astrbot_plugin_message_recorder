@@ -10,8 +10,9 @@
     <div class="upload-area" id="uploadArea">
       <div class="upload-icon">📁</div>
       <p>拖拽文件到这里，或点击选择文件</p>
-      <p class="text-muted">支持 JSON、CSV 格式</p>
-      <input type="file" id="importFile" accept=".json,.csv" style="display: none;">
+      <p class="text-muted">支持 JSON、CSV、MRPKG（含媒体文件包）格式，最大 4GB</p>
+      <p class="text-muted" style="font-size: 0.8rem;">大文件（超过 50MB）将自动使用分片上传</p>
+      <input type="file" id="importFile" accept=".json,.csv,.mrpkg" style="display: none;">
     </div>
     <div id="fileInfo" style="display: none; margin-top: 1rem;"></div>
   </div>
