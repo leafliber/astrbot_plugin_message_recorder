@@ -187,7 +187,7 @@ class MessageRecorder(Star):
                 "name": "消息记录器",
                 "version": "1.0.0",
                 "desc": "多平台消息记录器，提供 Web 面板进行查询、导出和统计",
-                "author": "cassia",
+                "author": "Leafiber",
             })
 
             logger.info("[MessageRecorder] Web 面板已注册到 MultiWebManager，访问 /message_recorder/")
