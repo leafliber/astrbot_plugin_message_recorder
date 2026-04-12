@@ -32,9 +32,21 @@
   </div>
 </div>
 
-<!-- 时间范围选择器 -->
+<!-- 图表区域 - 时间趋势和平台分布 -->
+<div class="charts-grid">
+  <div class="chart-container">
+    <div class="chart-title">消息时间趋势</div>
+    <div class="chart-box" id="timelineChart"></div>
+  </div>
+  <div class="chart-container">
+    <div class="chart-title">平台分布</div>
+    <div class="chart-box" id="platformChart"></div>
+  </div>
+</div>
+
+<!-- 时间范围选择器 - 仅影响发送者和群组排行 -->
 <div class="card">
-  <div class="card-header">时间范围</div>
+  <div class="card-header">时间范围（用于排行统计）</div>
   <div class="time-selector">
     <button class="time-btn" data-range="today">今日</button>
     <button class="time-btn" data-range="yesterday">昨日</button>
@@ -46,16 +58,8 @@
   <p class="text-muted" id="timeRangeInfo">-</p>
 </div>
 
-<!-- 图表区域 -->
+<!-- 图表区域 - 发送者和群组排行 -->
 <div class="charts-grid">
-  <div class="chart-container">
-    <div class="chart-title">消息时间趋势</div>
-    <div class="chart-box" id="timelineChart"></div>
-  </div>
-  <div class="chart-container">
-    <div class="chart-title">平台分布</div>
-    <div class="chart-box" id="platformChart"></div>
-  </div>
   <div class="chart-container">
     <div class="chart-title">热门发送者排行</div>
     <div class="chart-box" id="senderChart"></div>

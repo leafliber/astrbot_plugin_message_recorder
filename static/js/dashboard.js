@@ -73,12 +73,19 @@ async function loadDashboardData() {
     updatePlatformChart(statsResult.data.platform_stats);
   }
 
-  // 加载时间趋势
-  const timelineResult = await api.getTimeline('day', currentFilters);
+  // 加载时间趋势（不受时间范围选择器影响）
+  const timelineResult = await api.getTimeline('day', {});
   if (timelineResult.success) {
     updateTimelineChart(timelineResult.data.points);
   }
 
+  // 加载排行数据（受时间范围选择器影响）
+  await loadRankingData();
+
+  hideLoading();
+}
+
+async function loadRankingData() {
   // 加载发送者排行
   const senderResult = await api.getSenderRanking(10, currentFilters);
   if (senderResult.success) {
@@ -90,8 +97,6 @@ async function loadDashboardData() {
   if (groupResult.success) {
     updateGroupChart(groupResult.data.groups);
   }
-
-  hideLoading();
 }
 
 // ========== 更新统计卡片 ==========
@@ -328,7 +333,8 @@ function bindTimeSelectorEvents() {
       currentTimeRange = btn.dataset.range;
       if (currentTimeRange !== 'custom') {
         currentFilters = { time: currentTimeRange };
-        await loadDashboardData();
+        // 只重新加载排行数据，不影响时间趋势和平台分布
+        await loadRankingData();
       }
     });
   });
