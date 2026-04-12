@@ -56,24 +56,20 @@ def get_plugin_data_dir() -> Path:
 
 def create_blueprint(plugin_instance) -> Blueprint:
     """创建消息记录器 Web Blueprint"""
-    # 获取插件目录路径
     plugin_dir = get_plugin_dir()
 
     logger.info(f"[MessageRecorder Web] 插件目录: {plugin_dir}")
 
-    # 创建 Blueprint，指定模板和静态文件目录
-    # static_url_path 是相对于 Blueprint url_prefix 的路径
-    # 注册时 url_prefix="/message_recorder"，所以静态文件路径会是 "/message_recorder/static"
     bp = Blueprint(
         "message_recorder_web",
         __name__,
         template_folder=str(plugin_dir / "templates"),
         static_folder=str(plugin_dir / "static"),
-        static_url_path="/static"  # 相对路径，注册后会变成 /message_recorder/static
+        static_url_path="/static"
     )
 
-    # 获取数据库实例
-    db: Optional[Database] = plugin_instance._db
+    def get_db() -> Optional[Database]:
+        return plugin_instance._db
 
     # 主页面 - 仪表盘
     @bp.route("/")
@@ -104,11 +100,11 @@ def create_blueprint(plugin_instance) -> Blueprint:
     @bp.route("/api/stats")
     async def api_stats():
         """获取总体统计信息"""
-        if not db:
+        if not get_db():
             return jsonify({"success": False, "error": "数据库未初始化"}), 500
 
         try:
-            stats = await db.get_stats()
+            stats = await get_db().get_stats()
 
             # 格式化时间
             time_range = {}
@@ -137,7 +133,7 @@ def create_blueprint(plugin_instance) -> Blueprint:
     @bp.route("/api/stats/timeline")
     async def api_stats_timeline():
         """获取时间趋势数据"""
-        if not db:
+        if not get_db():
             return jsonify({"success": False, "error": "数据库未初始化"}), 500
 
         try:
@@ -151,7 +147,7 @@ def create_blueprint(plugin_instance) -> Blueprint:
             start_ts = int(start_time) if start_time else None
             end_ts = int(end_time) if end_time else None
 
-            points = await db.get_timeline_stats(
+            points = await get_db().get_timeline_stats(
                 interval=interval,
                 start_time=start_ts,
                 end_time=end_ts,
@@ -174,7 +170,7 @@ def create_blueprint(plugin_instance) -> Blueprint:
     @bp.route("/api/stats/senders")
     async def api_stats_senders():
         """获取发送者排行"""
-        if not db:
+        if not get_db():
             return jsonify({"success": False, "error": "数据库未初始化"}), 500
 
         try:
@@ -187,7 +183,7 @@ def create_blueprint(plugin_instance) -> Blueprint:
             if time_range:
                 start_time, end_time = parse_time_range(time_range)
 
-            senders = await db.get_sender_ranking(
+            senders = await get_db().get_sender_ranking(
                 limit=limit,
                 start_time=start_time,
                 end_time=end_time,
@@ -209,7 +205,7 @@ def create_blueprint(plugin_instance) -> Blueprint:
     @bp.route("/api/stats/groups")
     async def api_stats_groups():
         """获取群组活跃统计"""
-        if not db:
+        if not get_db():
             return jsonify({"success": False, "error": "数据库未初始化"}), 500
 
         try:
@@ -221,7 +217,7 @@ def create_blueprint(plugin_instance) -> Blueprint:
             if time_range:
                 start_time, end_time = parse_time_range(time_range)
 
-            groups = await db.get_group_ranking(
+            groups = await get_db().get_group_ranking(
                 limit=limit,
                 start_time=start_time,
                 end_time=end_time,
@@ -244,7 +240,7 @@ def create_blueprint(plugin_instance) -> Blueprint:
     @bp.route("/api/messages")
     async def api_messages():
         """查询消息列表"""
-        if not db:
+        if not get_db():
             return jsonify({"success": False, "error": "数据库未初始化"}), 500
 
         try:
@@ -252,10 +248,10 @@ def create_blueprint(plugin_instance) -> Blueprint:
             query_filter = build_query_filter(request.args)
 
             # 查询消息
-            messages = await db.query_messages(query_filter)
+            messages = await get_db().query_messages(query_filter)
 
             # 获取总数（用于分页）
-            total = await db.count_messages(query_filter)
+            total = await get_db().count_messages(query_filter)
 
             # 格式化消息数据
             formatted_messages = [format_message(msg) for msg in messages]
@@ -279,11 +275,11 @@ def create_blueprint(plugin_instance) -> Blueprint:
     @bp.route("/api/messages/<int:message_id>")
     async def api_message_detail(message_id: int):
         """获取单条消息详情"""
-        if not db:
+        if not get_db():
             return jsonify({"success": False, "error": "数据库未初始化"}), 500
 
         try:
-            message = await db.get_message_by_id(message_id)
+            message = await get_db().get_message_by_id(message_id)
 
             if not message:
                 return jsonify({"success": False, "error": "消息不存在"}), 404
@@ -299,19 +295,19 @@ def create_blueprint(plugin_instance) -> Blueprint:
     @bp.route("/api/messages/<int:message_id>/context")
     async def api_message_context(message_id: int):
         """获取消息上下文"""
-        if not db:
+        if not get_db():
             return jsonify({"success": False, "error": "数据库未初始化"}), 500
 
         try:
             before = int(request.args.get("before", 5))
             after = int(request.args.get("after", 5))
 
-            context = await db.get_context_messages(message_id, before, after)
+            context = await get_db().get_context_messages(message_id, before, after)
 
             return jsonify({
                 "success": True,
                 "data": {
-                    "target": format_message_detail(await db.get_message_by_id(message_id)),
+                    "target": format_message_detail(await get_db().get_message_by_id(message_id)),
                     "before": [format_message(m) for m in context["before"]],
                     "after": [format_message(m) for m in context["after"]]
                 }
@@ -325,7 +321,7 @@ def create_blueprint(plugin_instance) -> Blueprint:
     @bp.route("/api/search")
     async def api_search():
         """关键词搜索"""
-        if not db:
+        if not get_db():
             return jsonify({"success": False, "error": "数据库未初始化"}), 500
 
         try:
@@ -336,8 +332,8 @@ def create_blueprint(plugin_instance) -> Blueprint:
             query_filter = build_query_filter(request.args)
             query_filter.keyword = keyword
 
-            messages = await db.query_messages(query_filter)
-            total = await db.count_messages(query_filter)
+            messages = await get_db().query_messages(query_filter)
+            total = await get_db().count_messages(query_filter)
 
             return jsonify({
                 "success": True,
@@ -361,7 +357,7 @@ def create_blueprint(plugin_instance) -> Blueprint:
     @bp.route("/api/export", methods=["POST"])
     async def api_export():
         """创建导出任务"""
-        if not db:
+        if not get_db():
             return jsonify({"success": False, "error": "数据库未初始化"}), 500
 
         try:
@@ -374,7 +370,7 @@ def create_blueprint(plugin_instance) -> Blueprint:
             query_filter = build_query_filter_from_dict(filters)
 
             # 获取预估数量
-            estimated_count = await db.count_messages(query_filter)
+            estimated_count = await get_db().count_messages(query_filter)
 
             # 创建任务 ID
             task_id = f"export_{uuid.uuid4().hex[:12]}"
@@ -394,7 +390,7 @@ def create_blueprint(plugin_instance) -> Blueprint:
 
             # 异步执行导出
             asyncio.create_task(
-                execute_export_task(task_id, db, query_filter, format_type, options)
+                execute_export_task(task_id, get_db(), query_filter, format_type, options)
             )
 
             return jsonify({
@@ -464,7 +460,7 @@ def create_blueprint(plugin_instance) -> Blueprint:
     @bp.route("/api/import", methods=["POST"])
     async def api_import():
         """创建导入任务"""
-        if not db:
+        if not get_db():
             return jsonify({"success": False, "error": "数据库未初始化"}), 500
 
         try:
@@ -533,7 +529,7 @@ def create_blueprint(plugin_instance) -> Blueprint:
 
             # 异步执行导入
             asyncio.create_task(
-                execute_import_task(task_id, db, str(temp_file), mode)
+                execute_import_task(task_id, get_db(), str(temp_file), mode)
             )
 
             return jsonify({
@@ -567,7 +563,7 @@ def create_blueprint(plugin_instance) -> Blueprint:
     @bp.route("/api/import/chunk/init", methods=["POST"])
     async def api_chunk_init():
         """初始化分片上传会话"""
-        if not db:
+        if not get_db():
             return jsonify({"success": False, "error": "数据库未初始化"}), 500
 
         try:
@@ -663,7 +659,7 @@ def create_blueprint(plugin_instance) -> Blueprint:
     @bp.route("/api/import/chunk/complete", methods=["POST"])
     async def api_chunk_complete():
         """完成分片上传，组装文件并开始导入"""
-        if not db:
+        if not get_db():
             return jsonify({"success": False, "error": "数据库未初始化"}), 500
 
         try:
@@ -722,7 +718,7 @@ def create_blueprint(plugin_instance) -> Blueprint:
             }
 
             asyncio.create_task(
-                execute_import_task(task_id, db, str(assembled_file), session["mode"])
+                execute_import_task(task_id, get_db(), str(assembled_file), session["mode"])
             )
 
             return jsonify({
@@ -744,11 +740,11 @@ def create_blueprint(plugin_instance) -> Blueprint:
     @bp.route("/api/platforms")
     async def api_platforms():
         """获取所有平台列表"""
-        if not db:
+        if not get_db():
             return jsonify({"success": False, "error": "数据库未初始化"}), 500
 
         try:
-            platforms = await db.get_distinct_platforms()
+            platforms = await get_db().get_distinct_platforms()
             return jsonify({
                 "success": True,
                 "data": {"platforms": platforms}
@@ -760,7 +756,7 @@ def create_blueprint(plugin_instance) -> Blueprint:
     @bp.route("/api/senders")
     async def api_senders():
         """获取发送者列表"""
-        if not db:
+        if not get_db():
             return jsonify({"success": False, "error": "数据库未初始化"}), 500
 
         try:
@@ -768,7 +764,7 @@ def create_blueprint(plugin_instance) -> Blueprint:
             group_id = request.args.get("group_id")
             limit = int(request.args.get("limit", 50))
 
-            senders = await db.get_distinct_senders(platform=platform, group_id=group_id, limit=limit)
+            senders = await get_db().get_distinct_senders(platform=platform, group_id=group_id, limit=limit)
             return jsonify({
                 "success": True,
                 "data": {"senders": senders}
@@ -780,14 +776,14 @@ def create_blueprint(plugin_instance) -> Blueprint:
     @bp.route("/api/groups")
     async def api_groups():
         """获取群组列表"""
-        if not db:
+        if not get_db():
             return jsonify({"success": False, "error": "数据库未初始化"}), 500
 
         try:
             platform = request.args.get("platform")
             limit = int(request.args.get("limit", 50))
 
-            groups = await db.get_distinct_groups(platform=platform, limit=limit)
+            groups = await get_db().get_distinct_groups(platform=platform, limit=limit)
             return jsonify({
                 "success": True,
                 "data": {"groups": groups}
@@ -961,7 +957,7 @@ async def execute_export_task(task_id: str, db: Database, query_filter: QueryFil
     try:
         task["status"] = "processing"
 
-        messages = await db.query_messages(query_filter)
+        messages = await get_db().query_messages(query_filter)
 
         export_dir = Path("/tmp") / "message_recorder_exports"
         export_dir.mkdir(parents=True, exist_ok=True)
@@ -972,7 +968,7 @@ async def execute_export_task(task_id: str, db: Database, query_filter: QueryFil
 
         if include_media and format_type == "json":
             file_path = await _export_with_media(
-                task_id, db, messages, export_dir,
+                task_id, get_db(), messages, export_dir,
                 include_chain, include_raw, task,
             )
         elif format_type == "json":
@@ -1212,7 +1208,7 @@ async def execute_import_task(task_id: str, db: Database, file_path: str, mode: 
                 )
 
                 if mode == "skip_duplicates" or mode == "merge":
-                    await db.save_message(msg_record)
+                    await get_db().save_message(msg_record)
                     imported += 1
 
             except Exception as e:
