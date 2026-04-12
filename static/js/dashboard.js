@@ -9,8 +9,18 @@ let senderChart = null;
 let groupChart = null;
 
 // 当前时间范围
-let currentTimeRange = 'last7d';
+let currentTimeRange = 'last30d';
 let currentFilters = {};
+
+// 时间范围名称映射
+const timeRangeLabels = {
+  'today': '今日',
+  'yesterday': '昨日',
+  'last7d': '最近7天',
+  'last30d': '最近30天',
+  'week': '本周',
+  'month': '本月'
+};
 
 // ========== 初始化 ==========
 
@@ -20,6 +30,9 @@ document.addEventListener('DOMContentLoaded', async () => {
 
   // 加载统计数据
   await loadDashboardData();
+
+  // 初始化时间范围显示
+  updateTimeRangeDisplay(currentTimeRange);
 
   // 绑定时间选择器事件
   bindTimeSelectorEvents();
@@ -111,14 +124,6 @@ function updateStatsCards(stats) {
   if (groupEl) groupEl.textContent = formatNumber(stats.group_message_count);
   if (privateEl) privateEl.textContent = formatNumber(stats.private_message_count);
   if (platformEl) platformEl.textContent = stats.platform_count;
-
-  // 更新时间范围显示
-  const timeRangeEl = document.getElementById('timeRangeInfo');
-  if (timeRangeEl && stats.time_range) {
-    if (stats.time_range.start && stats.time_range.end) {
-      timeRangeEl.textContent = `${stats.time_range.start} ~ ${stats.time_range.end}`;
-    }
-  }
 }
 
 function formatNumber(num) {
@@ -128,6 +133,71 @@ function formatNumber(num) {
     return (num / 1000).toFixed(1) + 'K';
   }
   return num.toString();
+}
+
+function formatTimestamp(ts) {
+  const date = new Date(ts);
+  const year = date.getFullYear();
+  const month = String(date.getMonth() + 1).padStart(2, '0');
+  const day = String(date.getDate()).padStart(2, '0');
+  const hours = String(date.getHours()).padStart(2, '0');
+  const minutes = String(date.getMinutes()).padStart(2, '0');
+  const seconds = String(date.getSeconds()).padStart(2, '0');
+  return `${year}-${month}-${day} ${hours}:${minutes}:${seconds}`;
+}
+
+function parseTimeRangeClient(timeRange) {
+  const now = new Date();
+  let start, end;
+
+  switch (timeRange) {
+    case 'today':
+      start = new Date(now.getFullYear(), now.getMonth(), now.getDate(), 0, 0, 0);
+      end = new Date(now.getFullYear(), now.getMonth(), now.getDate(), 23, 59, 59);
+      break;
+    case 'yesterday':
+      const yesterday = new Date(now);
+      yesterday.setDate(now.getDate() - 1);
+      start = new Date(yesterday.getFullYear(), yesterday.getMonth(), yesterday.getDate(), 0, 0, 0);
+      end = new Date(yesterday.getFullYear(), yesterday.getMonth(), yesterday.getDate(), 23, 59, 59);
+      break;
+    case 'last7d':
+      start = new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000);
+      end = now;
+      break;
+    case 'last30d':
+      start = new Date(now.getTime() - 30 * 24 * 60 * 60 * 1000);
+      end = now;
+      break;
+    case 'week':
+      const dayOfWeek = now.getDay() || 7;
+      const weekStart = new Date(now);
+      weekStart.setDate(now.getDate() - dayOfWeek + 1);
+      start = new Date(weekStart.getFullYear(), weekStart.getMonth(), weekStart.getDate(), 0, 0, 0);
+      end = now;
+      break;
+    case 'month':
+      start = new Date(now.getFullYear(), now.getMonth(), 1, 0, 0, 0);
+      end = now;
+      break;
+    default:
+      start = new Date(now.getTime() - 30 * 24 * 60 * 60 * 1000);
+      end = now;
+  }
+
+  return { start: start.getTime(), end: end.getTime() };
+}
+
+function updateTimeRangeDisplay(timeRange) {
+  const timeRangeEl = document.getElementById('timeRangeInfo');
+  if (!timeRangeEl) return;
+
+  const { start, end } = parseTimeRangeClient(timeRange);
+  const startStr = formatTimestamp(start);
+  const endStr = formatTimestamp(end);
+  const label = timeRangeLabels[timeRange] || timeRange;
+  
+  timeRangeEl.innerHTML = `<span class="time-range-label">${label}</span> <span class="time-range-separator">|</span> <span class="time-range-value">${startStr} ~ ${endStr}</span>`;
 }
 
 // ========== 更新图表 ==========
@@ -333,6 +403,8 @@ function bindTimeSelectorEvents() {
       currentTimeRange = btn.dataset.range;
       if (currentTimeRange !== 'custom') {
         currentFilters = { time: currentTimeRange };
+        // 更新时间范围显示
+        updateTimeRangeDisplay(currentTimeRange);
         // 只重新加载排行数据，不影响时间趋势和平台分布
         await loadRankingData();
       }
