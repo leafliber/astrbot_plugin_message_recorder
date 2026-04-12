@@ -49,8 +49,9 @@
   },
   "image_save_mode": {
     "type": "string",
-    "description": "图片保存模式：original 保存原图，thumbnail 保存缩略图",
+    "description": "图片保存模式",
     "default": "original",
-    "hint": "original: 保存原图（体积大，画质高）；thumbnail: 保存缩略图（压缩后的小图，节省空间）"
+    "hint": "original: 保存原图（体积大，画质高）；thumbnail: 保存缩略图（压缩后的小图，节省空间）",
+    "options": ["original", "thumbnail"]
   }
 }
