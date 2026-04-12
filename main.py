@@ -19,7 +19,7 @@ from .media_downloader import MediaDownloader, MEDIA_TYPE_MAP
 @register(
     name="astrbot_plugin_message_recorder",
     desc="多平台消息记录器，将消息保存到 SQLite 数据库",
-    author="cassia",
+    author="Leafiber",
     version="1.0.0",
 )
 class MessageRecorder(Star):
@@ -349,6 +349,10 @@ class MessageRecorder(Star):
 
         return None
 
+    def _check_commands_enabled(self, event: AstrMessageEvent) -> bool:
+        """检查指令功能是否启用"""
+        return self.config.get("enable_commands", True)
+
     # ========== 管理指令 ==========
 
     @filter.command_group("msg_record")
@@ -359,6 +363,8 @@ class MessageRecorder(Star):
     @msg_record.command("stats")
     async def cmd_stats(self, event: AstrMessageEvent):
         """查看消息统计信息"""
+        if not self._check_commands_enabled(event):
+            return
         if not self._api:
             yield event.plain_result("数据库未初始化")
             return
@@ -396,6 +402,8 @@ class MessageRecorder(Star):
     @msg_record.command("cleanup")
     async def cmd_cleanup(self, event: AstrMessageEvent):
         """手动触发清理"""
+        if not self._check_commands_enabled(event):
+            return
         if not self._api:
             yield event.plain_result("数据库未初始化")
             return
@@ -408,6 +416,8 @@ class MessageRecorder(Star):
     @msg_record.command("query")
     async def cmd_query(self, event: AstrMessageEvent, sender: str = "", limit: int = 10):
         """查询消息记录 (sender: 发送者ID, limit: 数量)"""
+        if not self._check_commands_enabled(event):
+            return
         if not self._api:
             yield event.plain_result("数据库未初始化")
             return
@@ -438,6 +448,8 @@ class MessageRecorder(Star):
     @msg_record.command("search")
     async def cmd_search(self, event: AstrMessageEvent, keyword: str, limit: int = 10):
         """搜索消息内容 (keyword: 关键词, limit: 数量)"""
+        if not self._check_commands_enabled(event):
+            return
         if not self._api:
             yield event.plain_result("数据库未初始化")
             return
@@ -465,6 +477,8 @@ class MessageRecorder(Star):
     @msg_record.command("help")
     async def cmd_help(self, event: AstrMessageEvent):
         """查看帮助信息"""
+        if not self._check_commands_enabled(event):
+            return
         help_text = """📖 消息记录器帮助
 
 📊 统计与管理:
@@ -488,6 +502,8 @@ class MessageRecorder(Star):
     @msg_record.command("today")
     async def cmd_today(self, event: AstrMessageEvent, limit: int = 20):
         """查看今天的消息"""
+        if not self._check_commands_enabled(event):
+            return
         if not self._api:
             yield event.plain_result("数据库未初始化")
             return
@@ -517,6 +533,8 @@ class MessageRecorder(Star):
     @msg_record.command("yesterday")
     async def cmd_yesterday(self, event: AstrMessageEvent, limit: int = 20):
         """查看昨天的消息"""
+        if not self._check_commands_enabled(event):
+            return
         if not self._api:
             yield event.plain_result("数据库未初始化")
             return
@@ -546,6 +564,8 @@ class MessageRecorder(Star):
     @msg_record.command("history")
     async def cmd_history(self, event: AstrMessageEvent, time_range: str = "week", limit: int = 30):
         """按时间范围查询消息"""
+        if not self._check_commands_enabled(event):
+            return
         if not self._api:
             yield event.plain_result("数据库未初始化")
             return

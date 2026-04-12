@@ -5,6 +5,12 @@
     "default": true,
     "hint": "启用后将注册 Web 面板到 MultiWebManager，需要安装 astrbot_plugin_multi_web_manager 插件"
   },
+  "enable_commands": {
+    "type": "bool",
+    "description": "是否启用消息记录指令",
+    "default": true,
+    "hint": "启用后可通过 /msg_record 指令查询消息记录、查看统计等"
+  },
   "max_records": {
     "type": "int",
     "description": "最大消息记录数，超过时自动清理最旧的记录",

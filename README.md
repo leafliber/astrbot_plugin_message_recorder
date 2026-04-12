@@ -6,7 +6,7 @@
 [![Python](https://img.shields.io/badge/Python-3.10+-green?style=for-the-badge)](https://www.python.org/)
 [![License](https://img.shields.io/badge/License-MIT-yellow?style=for-the-badge)](LICENSE)
 
-**多平台消息记录插件 | SQLite 存储 | 丰富查询 API**
+**多平台消息记录插件 | SQLite 存储 | Web 管理面板 | 丰富查询 API**
 
 ![](https://count.getloli.com/get/@astrbot-plugin-message-recorder?theme=moebooru-h)
 
@@ -19,6 +19,8 @@
 - 🔥 **全平台支持** - 支持 Telegram、Discord、QQ 官方/私有、微信等所有 AstrBot 接入的平台
 - 💾 **SQLite 存储** - 轻量级本地数据库，无需额外配置，开箱即用
 - 📊 **完整记录** - 保存消息文本、发送者、群组、时间戳、消息链等完整信息
+- 🖼️ **多媒体保存** - 可选保存图片、语音、视频、文件到本地，支持原图/缩略图模式
+- 🌐 **Web 管理面板** - 可视化仪表盘、消息搜索、数据导出/导入功能
 - 🔍 **丰富查询** - 支持按发送者、群组、时间范围、关键词等多维度查询
 - 🔌 **API 接口** - 提供完整 API 供其他插件调用，轻松获取历史消息
 - 🧹 **自动清理** - 可配置保留天数和最大记录数，自动清理过期数据
@@ -40,6 +42,10 @@
 
 在 AstrBot WebUI 的插件市场中搜索「消息记录器」并安装
 
+### 依赖说明
+
+如需使用 Web 管理面板，需安装 [astrbot_plugin_multi_web_manager](https://github.com/leafliber/astrbot_plugin_multi_web_manager) 插件。
+
 ---
 
 ## 🎛️ 配置项
@@ -48,15 +54,64 @@
 
 | 配置项 | 默认值 | 说明 |
 |--------|--------|------|
-| `max_records` | 100000 | 最大消息记录数，超过时自动清理最旧记录（0 表示不限制） |
-| `retention_days` | 30 | 消息保留天数，超过此天数自动清理（0 表示永久保留） |
+| `enable_web_ui` | true | 是否启用 Web 管理面板 |
+| `enable_commands` | true | 是否启用消息记录指令 |
+| `max_records` | 0 | 最大消息记录数，超过时自动清理最旧记录（0 表示不限制） |
+| `retention_days` | 0 | 消息保留天数，超过此天数自动清理（0 表示永久保留） |
 | `save_message_chain` | true | 是否保存完整消息链（包含图片、表情等） |
 | `save_raw_message` | false | 是否保存平台原始消息对象 |
 | `cleanup_interval_hours` | 24 | 自动清理间隔（小时） |
+| `save_media_files` | false | 是否保存多媒体文件（图片、语音、视频、文件）到本地 |
+| `image_save_mode` | original | 图片保存模式：`original` 保存原图，`thumbnail` 保存缩略图 |
+
+---
+
+## 🌐 Web 管理面板
+
+启用 Web 面板后，可通过 `/message_recorder/` 路径访问管理界面。
+
+### 仪表盘
+
+- **统计卡片** - 总消息数、群聊消息、私聊消息、平台数
+- **时间趋势图** - 消息数量随时间变化的趋势
+- **平台分布图** - 各平台消息占比
+- **发送者排行** - 消息发送量排名
+- **群组排行** - 群组活跃度排名
+
+### 消息搜索
+
+- 多条件组合搜索（平台、群组、发送者、时间范围、关键词）
+- 分页浏览历史消息
+- 查看消息详情和上下文
+- 支持查看保存的媒体文件
+
+### 数据导出
+
+支持多种导出格式：
+
+| 格式 | 说明 |
+|------|------|
+| JSON | 标准 JSON 格式，适合数据交换 |
+| CSV | 表格格式，可用 Excel 打开 |
+| MRPKG | 专用打包格式，包含媒体文件，支持导入 |
+
+导出功能支持：
+- 按条件筛选导出
+- 异步后台处理，不阻塞操作
+- 打包媒体文件（MRPKG 格式）
+
+### 数据导入
+
+- 支持 JSON、CSV、MRPKG 格式导入
+- 大文件分片上传
+- 导入进度实时显示
+- 数据去重处理
 
 ---
 
 ## 📱 指令使用
+
+> 指令功能可通过配置项 `enable_commands` 启用或禁用，默认启用。
 
 ### 基础指令
 
@@ -98,10 +153,8 @@
 ```python
 from astrbot.api.star import Context
 
-# 在你的插件中获取 MessageRecorder 的 API
 async def get_message_recorder_api(context: Context):
     """获取消息记录器 API"""
-    # 通过插件名称获取插件实例
     recorder = context.get_registered_star("astrbot_plugin_message_recorder")
     if recorder and hasattr(recorder, "get_api"):
         return recorder.get_api()
@@ -244,7 +297,9 @@ message.get_raw_message_dict()           # 解析原始消息为字典
 
 ---
 
-## 📊 数据库结构
+## 📊 数据存储
+
+### 数据库
 
 消息存储在 SQLite 数据库中，路径为：
 
@@ -269,6 +324,18 @@ data/plugin_data/astrbot_plugin_message_recorder/messages.db
 | `raw_message` | TEXT | 原始消息 JSON |
 | `timestamp` | INTEGER | 消息时间戳 |
 | `created_at` | INTEGER | 记录创建时间 |
+
+### 多媒体文件
+
+启用多媒体保存后，文件存储路径为：
+
+```
+data/plugin_data/astrbot_plugin_message_recorder/media/
+├── images/     # 图片
+├── records/    # 语音
+├── videos/     # 视频
+└── files/      # 其他文件
+```
 
 ---
 
