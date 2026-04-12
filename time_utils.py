@@ -3,7 +3,7 @@
 import re
 import time
 from datetime import datetime, timedelta
-from typing import Tuple, Optional
+from typing import Tuple, Optional, Any
 
 
 def get_day_start_end(date: datetime) -> Tuple[int, int]:
@@ -273,3 +273,27 @@ def format_time_range(start_ts: int, end_ts: int) -> str:
     end_str = end_dt.strftime("%Y-%m-%d %H:%M")
 
     return f"{start_str} ~ {end_str}"
+
+
+def normalize_timestamp(ts: Any) -> int:
+    """标准化时间戳为毫秒级
+
+    不同平台可能返回不同单位的时间戳：
+    - 秒级时间戳（约 10 位）：1744290671 ≈ 2025年
+    - 毫秒级时间戳（约 13 位）：1744290671000 ≈ 2025年
+
+    判断逻辑：如果时间戳小于 100000000000 (2286年的秒级时间戳)，
+    则认为是秒级，需要乘以 1000 转换为毫秒级。
+    """
+    if ts is None:
+        return int(time.time() * 1000)
+
+    try:
+        ts_int = int(ts)
+    except (TypeError, ValueError):
+        return int(time.time() * 1000)
+
+    if ts_int < 100000000000:
+        return ts_int * 1000
+
+    return ts_int

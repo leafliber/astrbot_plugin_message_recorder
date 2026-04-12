@@ -4,6 +4,8 @@ from dataclasses import dataclass, field, asdict
 from typing import Optional, List
 import json
 
+PLUGIN_DIR_NAME = "astrbot_plugin_message_recorder"
+
 
 @dataclass
 class MessageRecord:

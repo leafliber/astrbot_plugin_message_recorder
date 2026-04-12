@@ -7,11 +7,8 @@ from astrbot.api import logger
 from astrbot.core.utils.astrbot_path import get_astrbot_plugin_data_path
 
 from .database import Database
-from .models import MessageRecord, QueryFilter, MessageStats
+from .models import MessageRecord, QueryFilter, MessageStats, PLUGIN_DIR_NAME
 from .media_downloader import MediaDownloader
-
-
-PLUGIN_DIR_NAME = "astrbot_plugin_message_recorder"
 
 
 class MessageRecorderAPI:

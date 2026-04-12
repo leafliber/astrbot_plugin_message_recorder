@@ -6,13 +6,13 @@ import time
 from typing import Optional
 
 from astrbot.api import AstrBotConfig, logger
-from astrbot.api.event import filter, AstrMessageEvent, MessageEventResult
+from astrbot.api.event import filter, AstrMessageEvent
 from astrbot.api.star import Context, Star, register
 
 from .database import Database
 from .api import MessageRecorderAPI
 from .models import MessageRecord
-from .time_utils import parse_time_range, format_time_range
+from .time_utils import parse_time_range, format_time_range, normalize_timestamp
 from .media_downloader import MediaDownloader, MEDIA_TYPE_MAP
 
 
@@ -210,25 +210,6 @@ class MessageRecorder(Star):
         # 使用 create_task 异步执行保存，避免阻塞事件处理
         asyncio.create_task(self._save_message_async(event))
 
-    def _normalize_timestamp(self, ts: Optional[int]) -> int:
-        """标准化时间戳为毫秒级
-
-        不同平台可能返回不同单位的时间戳：
-        - 秒级时间戳（约 10 位）：1744290671 ≈ 2025年
-        - 毫秒级时间戳（约 13 位）：1744290671000 ≈ 2025年
-
-        判断逻辑：如果时间戳小于 100000000000 (2286年的秒级时间戳)，
-        则认为是秒级，需要乘以 1000 转换为毫秒级。
-        """
-        if ts is None:
-            return int(time.time() * 1000)
-
-        # 如果时间戳看起来是秒级（小于 100000000000），转换为毫秒级
-        if ts < 100000000000:
-            return ts * 1000
-
-        return ts
-
     async def _save_message_async(self, event: AstrMessageEvent):
         """异步保存消息，不阻塞事件处理"""
         logger.debug("[MessageRecorder] 收到消息事件，开始处理")
@@ -237,7 +218,7 @@ class MessageRecorder(Star):
             message_obj = event.message_obj
             platform = self._get_platform_name(event)
 
-            normalized_timestamp = self._normalize_timestamp(message_obj.timestamp)
+            normalized_timestamp = normalize_timestamp(message_obj.timestamp)
 
             record = MessageRecord(
                 platform=platform,

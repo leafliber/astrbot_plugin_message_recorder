@@ -3,7 +3,6 @@
 import os
 import asyncio
 import shutil
-import tempfile
 import uuid
 import time
 import json
@@ -13,14 +12,14 @@ from pathlib import Path
 from typing import Dict, Any, Optional, List
 from datetime import datetime
 
-from quart import Blueprint, jsonify, request, render_template, send_file, send_from_directory
+from quart import Blueprint, jsonify, request, render_template, send_file
 
 from astrbot.api import logger
-from astrbot.core.utils.astrbot_path import get_astrbot_plugin_path, get_astrbot_plugin_data_path
+from astrbot.core.utils.astrbot_path import get_astrbot_plugin_data_path
 
 from ..database import Database
-from ..models import QueryFilter, MessageRecord
-from ..time_utils import parse_time_range
+from ..models import QueryFilter, MessageRecord, PLUGIN_DIR_NAME
+from ..time_utils import parse_time_range, normalize_timestamp
 from ..media_downloader import MediaDownloader
 
 
@@ -36,9 +35,6 @@ _export_tasks: Dict[str, Dict[str, Any]] = {}
 # 分片上传会话存储
 _chunk_sessions: Dict[str, Dict[str, Any]] = {}
 _import_tasks: Dict[str, Dict[str, Any]] = {}
-
-# 插件目录名
-PLUGIN_DIR_NAME = "astrbot_plugin_message_recorder"
 
 # 当前模块所在目录（web/blueprint.py 的父目录的父目录就是插件根目录）
 _current_dir = Path(__file__).resolve().parent.parent
@@ -437,8 +433,8 @@ def create_blueprint(plugin_instance) -> Blueprint:
             if file_path and os.path.exists(file_path):
                 try:
                     os.remove(file_path)
-                except:
-                    pass
+                except OSError as e:
+                    logger.warning(f"[MessageRecorder Web] 删除过期导出文件失败: {file_path}, {e}")
             # 清理任务记录
             _export_tasks.pop(task_id, None)
             return jsonify({
@@ -801,7 +797,12 @@ def create_blueprint(plugin_instance) -> Blueprint:
         if not file_path.exists():
             return jsonify({"success": False, "error": "文件不存在"}), 404
 
-        if not str(file_path.resolve()).startswith(str(media_base.resolve())):
+        if file_path.is_symlink():
+            return jsonify({"success": False, "error": "非法路径"}), 403
+
+        try:
+            file_path.resolve().relative_to(media_base.resolve())
+        except ValueError:
             return jsonify({"success": False, "error": "非法路径"}), 403
 
         return await send_file(str(file_path))
@@ -978,7 +979,7 @@ async def execute_export_task(task_id: str, db: Database, query_filter: QueryFil
 
         messages = await db.query_messages(query_filter)
 
-        export_dir = Path("/tmp") / "message_recorder_exports"
+        export_dir = get_plugin_data_dir() / "exports"
         export_dir.mkdir(parents=True, exist_ok=True)
 
         include_chain = options.get("include_chain", True)
@@ -1133,32 +1134,6 @@ async def _export_with_media(
     return pkg_path
 
 
-def normalize_timestamp(ts: Any) -> int:
-    """标准化时间戳为毫秒级
-
-    不同平台可能返回不同单位的时间戳：
-    - 秒级时间戳（约 10 位）：1744290671 ≈ 2025年
-    - 毫秒级时间戳（约 13 位）：1744290671000 ≈ 2025年
-
-    判断逻辑：如果时间戳小于 100000000000 (2286年的秒级时间戳)，
-    则认为是秒级，需要乘以 1000 转换为毫秒级。
-    """
-    if ts is None:
-        return int(time.time() * 1000)
-
-    # 转换为整数
-    try:
-        ts_int = int(ts)
-    except (TypeError, ValueError):
-        return int(time.time() * 1000)
-
-    # 如果时间戳看起来是秒级（小于 100000000000），转换为毫秒级
-    if ts_int < 100000000000:
-        return ts_int * 1000
-
-    return ts_int
-
-
 async def execute_import_task(task_id: str, db: Database, file_path: str, mode: str):
     """执行导入任务"""
     import json
@@ -1243,8 +1218,8 @@ async def execute_import_task(task_id: str, db: Database, file_path: str, mode: 
 
         try:
             os.remove(file_path)
-        except:
-            pass
+        except OSError as e:
+            logger.debug(f"[MessageRecorder Web] 清理导入临时文件失败: {file_path}, {e}")
 
         logger.info(
             f"[MessageRecorder Web] 导入任务 {task_id} 完成: "
@@ -1285,7 +1260,22 @@ async def _import_mrpkg(file_path: str) -> tuple:
             if not rel_path:
                 continue
 
+            if ".." in Path(rel_path).parts or rel_path.startswith("/"):
+                logger.warning(
+                    f"[MessageRecorder Web] 跳过可疑路径: {rel_path}"
+                )
+                continue
+
             target_path = media_base / rel_path
+
+            try:
+                target_path.resolve().relative_to(media_base.resolve())
+            except ValueError:
+                logger.warning(
+                    f"[MessageRecorder Web] 路径遍历尝试被阻止: {rel_path}"
+                )
+                continue
+
             target_path.parent.mkdir(parents=True, exist_ok=True)
 
             try:
@@ -1317,13 +1307,16 @@ def get_platform_icon(platform: str) -> str:
 
 
 async def cleanup_expired_export_files():
-    """定期清理过期的导出文件和任务记录"""
+    """定期清理过期的导出文件、导入任务和分片上传会话"""
+    CHUNK_SESSION_MAX_AGE = 3600  # 分片上传会话最大有效期 1 小时
+
     while True:
         try:
-            # 每 10 分钟检查一次
             await asyncio.sleep(600)
 
             current_time = time.time()
+
+            # 清理过期的导出任务
             expired_tasks = []
 
             for task_id, task in list(_export_tasks.items()):
@@ -1331,7 +1324,6 @@ async def cleanup_expired_export_files():
                 if completed_at and current_time - completed_at > MAX_EXPORT_FILE_AGE:
                     expired_tasks.append(task_id)
 
-                    # 删除文件
                     file_path = task.get("file_path")
                     if file_path and os.path.exists(file_path):
                         try:
@@ -1340,12 +1332,43 @@ async def cleanup_expired_export_files():
                         except Exception as e:
                             logger.warning(f"[MessageRecorder Web] 清理导出文件失败: {e}")
 
-            # 清理任务记录
             for task_id in expired_tasks:
                 _export_tasks.pop(task_id, None)
 
             if expired_tasks:
                 logger.info(f"[MessageRecorder Web] 已清理 {len(expired_tasks)} 个过期导出任务")
+
+            # 清理过期的分片上传会话
+            expired_sessions = []
+            for session_id, session in list(_chunk_sessions.items()):
+                created_at = session.get("created_at", 0)
+                if current_time - created_at > CHUNK_SESSION_MAX_AGE:
+                    expired_sessions.append(session_id)
+                    chunks_dir = session.get("chunks_dir")
+                    if chunks_dir and os.path.exists(chunks_dir):
+                        try:
+                            shutil.rmtree(chunks_dir, ignore_errors=True)
+                        except Exception as e:
+                            logger.warning(f"[MessageRecorder Web] 清理分片目录失败: {e}")
+
+            for session_id in expired_sessions:
+                _chunk_sessions.pop(session_id, None)
+
+            if expired_sessions:
+                logger.info(f"[MessageRecorder Web] 已清理 {len(expired_sessions)} 个过期分片上传会话")
+
+            # 清理过期的导入任务记录
+            expired_imports = []
+            for task_id, task in list(_import_tasks.items()):
+                completed_at = task.get("completed_at", 0)
+                if completed_at and current_time - completed_at > MAX_EXPORT_FILE_AGE:
+                    expired_imports.append(task_id)
+
+            for task_id in expired_imports:
+                _import_tasks.pop(task_id, None)
+
+            if expired_imports:
+                logger.info(f"[MessageRecorder Web] 已清理 {len(expired_imports)} 个过期导入任务记录")
 
         except asyncio.CancelledError:
             break
