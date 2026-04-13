@@ -120,55 +120,61 @@ class Database:
         conditions: List[str] = []
         params: List[Any] = []
 
-        # 平台筛选
+        def safe_str(val: Any) -> str:
+            if val is None:
+                return ""
+            return str(val)
+
+        def safe_int(val: Any) -> int:
+            if val is None:
+                return 0
+            try:
+                return int(val)
+            except (TypeError, ValueError):
+                return 0
+
         platforms = query_filter.get_platforms()
         if platforms:
             if len(platforms) == 1:
                 conditions.append("platform = ?")
-                params.append(platforms[0])
+                params.append(safe_str(platforms[0]))
             else:
                 conditions.append(f"platform IN ({','.join(['?'] * len(platforms))})")
-                params.extend(platforms)
+                params.extend([safe_str(p) for p in platforms])
 
-        # 发送者筛选
         sender_ids = query_filter.get_sender_ids()
         if sender_ids:
             if len(sender_ids) == 1:
                 conditions.append("sender_id = ?")
-                params.append(sender_ids[0])
+                params.append(safe_str(sender_ids[0]))
             else:
                 conditions.append(f"sender_id IN ({','.join(['?'] * len(sender_ids))})")
-                params.extend(sender_ids)
+                params.extend([safe_str(s) for s in sender_ids])
 
-        # 群组筛选
         group_ids = query_filter.get_group_ids()
         if group_ids:
             if len(group_ids) == 1:
                 conditions.append("group_id = ?")
-                params.append(group_ids[0])
+                params.append(safe_str(group_ids[0]))
             else:
                 conditions.append(f"group_id IN ({','.join(['?'] * len(group_ids))})")
-                params.extend(group_ids)
+                params.extend([safe_str(g) for g in group_ids])
 
-        # 会话筛选
         session_ids = query_filter.get_session_ids()
         if session_ids:
             if len(session_ids) == 1:
                 conditions.append("session_id = ?")
-                params.append(session_ids[0])
+                params.append(safe_str(session_ids[0]))
             else:
                 conditions.append(f"session_id IN ({','.join(['?'] * len(session_ids))})")
-                params.extend(session_ids)
+                params.extend([safe_str(s) for s in session_ids])
 
-        # 消息类型
         if query_filter.message_type:
             conditions.append("message_type = ?")
-            params.append(query_filter.message_type)
+            params.append(safe_str(query_filter.message_type))
 
-        # 时间筛选 - 支持 time 字段
         if query_filter.time:
             start_time, end_time = parse_time_range(query_filter.time)
-            # 调试日志：显示实际的时间范围参数
             from datetime import datetime
             start_dt = datetime.fromtimestamp(start_time / 1000)
             end_dt = datetime.fromtimestamp(end_time / 1000)
@@ -177,21 +183,20 @@ class Database:
                 f"end={end_time} ({end_dt})"
             )
             conditions.append("timestamp >= ?")
-            params.append(start_time)
+            params.append(safe_int(start_time))
             conditions.append("timestamp <= ?")
-            params.append(end_time)
+            params.append(safe_int(end_time))
         else:
-            if query_filter.start_time:
+            if query_filter.start_time is not None:
                 conditions.append("timestamp >= ?")
-                params.append(query_filter.start_time)
-            if query_filter.end_time:
+                params.append(safe_int(query_filter.start_time))
+            if query_filter.end_time is not None:
                 conditions.append("timestamp <= ?")
-                params.append(query_filter.end_time)
+                params.append(safe_int(query_filter.end_time))
 
-        # 关键词搜索
         if query_filter.keyword:
             conditions.append("message_str LIKE ?")
-            params.append(f"%{query_filter.keyword}%")
+            params.append(f"%{safe_str(query_filter.keyword)}%")
 
         where_clause = " AND ".join(conditions) if conditions else "1=1"
         return where_clause, params
@@ -201,22 +206,40 @@ class Database:
         where_clause, params = self._build_where_clause(query_filter)
         order_clause = "timestamp DESC" if query_filter.is_desc_order() else "timestamp ASC"
 
+        limit_val = query_filter.limit
+        offset_val = query_filter.offset
+
+        no_limit = limit_val is None or limit_val == -1 or limit_val == 0
+        effective_limit = None if no_limit else int(limit_val)
+        effective_offset = max(0, int(offset_val) if offset_val is not None else 0)
+
         logger.debug(
             f"[MessageRecorder] 执行查询: WHERE {where_clause}, "
-            f"params={params}, limit={query_filter.limit}, offset={query_filter.offset}, order={order_clause}"
+            f"params={params}, limit={effective_limit}, offset={effective_offset}, order={order_clause}"
         )
 
-        sql = f"""
-            SELECT id, platform, message_id, session_id, group_id,
-                   sender_id, sender_name, message_type,
-                   message_str, message_chain, raw_message,
-                   timestamp, created_at
-            FROM messages
-            WHERE {where_clause}
-            ORDER BY {order_clause}
-            LIMIT ? OFFSET ?
-        """
-        params.extend([query_filter.limit, query_filter.offset])
+        if effective_limit is not None:
+            sql = f"""
+                SELECT id, platform, message_id, session_id, group_id,
+                       sender_id, sender_name, message_type,
+                       message_str, message_chain, raw_message,
+                       timestamp, created_at
+                FROM messages
+                WHERE {where_clause}
+                ORDER BY {order_clause}
+                LIMIT ? OFFSET ?
+            """
+            params.extend([effective_limit, effective_offset])
+        else:
+            sql = f"""
+                SELECT id, platform, message_id, session_id, group_id,
+                       sender_id, sender_name, message_type,
+                       message_str, message_chain, raw_message,
+                       timestamp, created_at
+                FROM messages
+                WHERE {where_clause}
+                ORDER BY {order_clause}
+            """
 
         cursor = await self._db.execute(sql, params)
         rows = await cursor.fetchall()
