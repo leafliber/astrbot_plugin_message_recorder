@@ -8,11 +8,14 @@ import time
 import json
 import csv
 import zipfile
+import secrets
+import hashlib
+import string
 from pathlib import Path
 from typing import Dict, Any, Optional, List
 from datetime import datetime
 
-from quart import Blueprint, jsonify, request, render_template, send_file
+from quart import Blueprint, jsonify, request, render_template, send_file, session
 
 from astrbot.api import logger
 from astrbot.core.utils.astrbot_path import get_astrbot_plugin_data_path
@@ -28,6 +31,17 @@ MAX_IMPORT_FILE_SIZE = 4 * 1024 * 1024 * 1024  # 4GB
 MAX_EXPORT_FILE_AGE = 3600  # 导出文件有效期 1 小时
 ALLOWED_IMPORT_EXTENSIONS = {".json", ".csv", ".mrpkg"}
 CHUNK_SIZE = 5 * 1024 * 1024  # 分片大小 5MB
+
+# 验证码配置
+CAPTCHA_LENGTH = 6
+CAPTCHA_EXPIRE_SECONDS = 300  # 验证码有效期 5 分钟
+AUTH_TOKEN_EXPIRE_SECONDS = 1800  # 认证 token 有效期 30 分钟
+
+# 验证码存储: {captcha_id: {"code": "xxxx", "created_at": timestamp}}
+_captcha_store: Dict[str, Dict[str, Any]] = {}
+
+# 认证 token 存储: {token_hash: {"created_at": timestamp}}
+_auth_tokens: Dict[str, Dict[str, Any]] = {}
 
 # 导出任务存储
 _export_tasks: Dict[str, Dict[str, Any]] = {}
@@ -50,11 +64,146 @@ def get_plugin_data_dir() -> Path:
     return Path(get_astrbot_plugin_data_path()) / PLUGIN_DIR_NAME
 
 
+def _safe_remove_file(file_path: str, max_retries: int = 3, delay: float = 0.5) -> bool:
+    """安全删除文件，带重试机制"""
+    for attempt in range(max_retries):
+        try:
+            os.remove(file_path)
+            return True
+        except OSError as e:
+            if attempt < max_retries - 1:
+                time.sleep(delay)
+            else:
+                logger.debug(f"[MessageRecorder Web] 清理临时文件失败（重试 {max_retries} 次）: {file_path}, {e}")
+                return False
+    return False
+
+
+def _cleanup_temp_dir():
+    """启动时清理残留的临时文件"""
+    temp_dir = get_plugin_data_dir() / "temp"
+    if not temp_dir.exists():
+        return
+
+    cleaned = 0
+    for item in temp_dir.iterdir():
+        try:
+            if item.is_file():
+                item.unlink()
+                cleaned += 1
+            elif item.is_dir():
+                shutil.rmtree(item, ignore_errors=True)
+                cleaned += 1
+        except Exception as e:
+            logger.warning(f"[MessageRecorder Web] 启动清理临时文件失败: {item}, {e}")
+
+    if cleaned > 0:
+        logger.info(f"[MessageRecorder Web] 启动时清理了 {cleaned} 个残留临时文件/目录")
+
+
+def _generate_captcha_code(length: int = CAPTCHA_LENGTH) -> str:
+    """生成随机验证码"""
+    return "".join(secrets.choice(string.digits) for _ in range(length))
+
+
+def _generate_captcha_id() -> str:
+    """生成验证码 ID"""
+    return uuid.uuid4().hex[:16]
+
+
+def _generate_auth_token() -> str:
+    """生成认证 token"""
+    return secrets.token_urlsafe(32)
+
+
+def _hash_token(token: str) -> str:
+    """对 token 进行哈希"""
+    return hashlib.sha256(token.encode()).hexdigest()
+
+
+def _create_captcha() -> str:
+    """创建验证码，返回 captcha_id，验证码打印到控制台"""
+    captcha_id = _generate_captcha_id()
+    code = _generate_captcha_code()
+    _captcha_store[captcha_id] = {
+        "code": code,
+        "created_at": time.time(),
+    }
+    logger.info(f"[MessageRecorder Web] 验证码: {code} (ID: {captcha_id})")
+    return captcha_id
+
+
+def _verify_captcha(captcha_id: str, code: str) -> bool:
+    """验证验证码"""
+    captcha = _captcha_store.get(captcha_id)
+    if not captcha:
+        return False
+
+    if time.time() - captcha["created_at"] > CAPTCHA_EXPIRE_SECONDS:
+        _captcha_store.pop(captcha_id, None)
+        return False
+
+    if captcha["code"] != code:
+        return False
+
+    _captcha_store.pop(captcha_id, None)
+    return True
+
+
+def _create_auth_token() -> str:
+    """创建认证 token"""
+    token = _generate_auth_token()
+    token_hash = _hash_token(token)
+    _auth_tokens[token_hash] = {
+        "created_at": time.time(),
+    }
+    return token
+
+
+def _verify_auth_token(token: str) -> bool:
+    """验证认证 token"""
+    if not token:
+        return False
+
+    token_hash = _hash_token(token)
+    auth = _auth_tokens.get(token_hash)
+
+    if not auth:
+        return False
+
+    if time.time() - auth["created_at"] > AUTH_TOKEN_EXPIRE_SECONDS:
+        _auth_tokens.pop(token_hash, None)
+        return False
+
+    return True
+
+
+def _cleanup_expired_captchas_and_tokens():
+    """清理过期的验证码和 token"""
+    current_time = time.time()
+
+    expired_captchas = [
+        cid for cid, c in _captcha_store.items()
+        if current_time - c["created_at"] > CAPTCHA_EXPIRE_SECONDS
+    ]
+    for cid in expired_captchas:
+        _captcha_store.pop(cid, None)
+
+    expired_tokens = [
+        th for th, a in _auth_tokens.items()
+        if current_time - a["created_at"] > AUTH_TOKEN_EXPIRE_SECONDS
+    ]
+    for th in expired_tokens:
+        _auth_tokens.pop(th, None)
+
+
 def create_blueprint(plugin_instance) -> Blueprint:
     """创建消息记录器 Web Blueprint"""
     plugin_dir = get_plugin_dir()
 
     logger.info(f"[MessageRecorder Web] 插件目录: {plugin_dir}")
+
+    _cleanup_temp_dir()
 
     bp = Blueprint(
         "message_recorder_web",
@@ -66,6 +215,26 @@ def create_blueprint(plugin_instance) -> Blueprint:
 
     def get_db() -> Optional[Database]:
         return plugin_instance._db
+
+    _WRITE_ENDPOINT_PREFIXES = ("/api/import",)
+
+    @bp.before_request
+    async def check_write_auth():
+        if request.method not in ("POST", "PUT", "DELETE", "PATCH"):
+            return None
+        if not any(request.path.startswith(prefix) for prefix in _WRITE_ENDPOINT_PREFIXES):
+            return None
+
+        if request.path in ("/api/captcha", "/api/captcha/verify"):
+            return None
+
+        token = request.headers.get("X-Auth-Token", "") or request.args.get("auth_token", "")
+        if not _verify_auth_token(token):
+            return jsonify({
+                "success": False,
+                "error": "需要验证码鉴权",
+                "require_captcha": True
+            }), 401
 
     # 主页面 - 仪表盘
     @bp.route("/")
@@ -431,11 +600,7 @@ def create_blueprint(plugin_instance) -> Blueprint:
             # 删除过期文件
             file_path = task.get("file_path")
             if file_path and os.path.exists(file_path):
-                try:
-                    os.remove(file_path)
-                except OSError as e:
-                    logger.warning(f"[MessageRecorder Web] 删除过期导出文件失败: {file_path}, {e}")
-            # 清理任务记录
+                _safe_remove_file(file_path)
             _export_tasks.pop(task_id, None)
             return jsonify({
                 "success": False,
@@ -450,6 +615,40 @@ def create_blueprint(plugin_instance) -> Blueprint:
         filename = f"message_export_{task_id}.{actual_ext}"
 
         return await send_file(file_path, as_attachment=True, attachment_filename=filename)
+
+    # ========== 验证码鉴权 API ==========
+
+    @bp.route("/api/captcha", methods=["GET"])
+    async def api_get_captcha():
+        """获取验证码 ID，验证码打印到控制台"""
+        _cleanup_expired_captchas_and_tokens()
+
+        captcha_id = _create_captcha()
+        return jsonify({
+            "success": True,
+            "captcha_id": captcha_id,
+            "expires_in": CAPTCHA_EXPIRE_SECONDS
+        })
+
+    @bp.route("/api/captcha/verify", methods=["POST"])
+    async def api_verify_captcha():
+        """验证验证码并获取认证 token"""
+        data = await request.get_json(silent=True) or {}
+        captcha_id = data.get("captcha_id", "")
+        code = data.get("code", "")
+
+        if not captcha_id or not code:
+            return jsonify({"success": False, "error": "缺少验证码参数"}), 400
+
+        if not _verify_captcha(captcha_id, code):
+            return jsonify({"success": False, "error": "验证码错误或已过期"}), 400
+
+        token = _create_auth_token()
+        return jsonify({
+            "success": True,
+            "auth_token": token,
+            "expires_in": AUTH_TOKEN_EXPIRE_SECONDS
+        })
 
     # ========== 导入 API ==========
 
@@ -794,18 +993,21 @@ def create_blueprint(plugin_instance) -> Blueprint:
         media_base = Path(get_astrbot_plugin_data_path()) / PLUGIN_DIR_NAME / "media"
         file_path = media_base / rel_path
 
-        if not file_path.exists():
-            return jsonify({"success": False, "error": "文件不存在"}), 404
-
-        if file_path.is_symlink():
-            return jsonify({"success": False, "error": "非法路径"}), 403
+        resolved_base = media_base.resolve()
+        resolved_path = file_path.resolve()
 
         try:
-            file_path.resolve().relative_to(media_base.resolve())
+            resolved_path.relative_to(resolved_base)
         except ValueError:
             return jsonify({"success": False, "error": "非法路径"}), 403
 
-        return await send_file(str(file_path))
+        if not resolved_path.exists():
+            return jsonify({"success": False, "error": "文件不存在"}), 404
+
+        if not resolved_path.is_file():
+            return jsonify({"success": False, "error": "非法路径"}), 403
+
+        return await send_file(str(resolved_path))
 
     return bp
 
@@ -1139,6 +1341,60 @@ async def execute_import_task(task_id: str, db: Database, file_path: str, mode: 
     import json
     import csv
 
+    MAX_FIELD_LENGTH = 65535
+    VALID_MESSAGE_TYPES = {"group", "private"}
+
+    def sanitize_import_record(record: dict) -> Optional[dict]:
+        if not isinstance(record, dict):
+            return None
+
+        platform = str(record.get("platform", "unknown")).strip()[:64]
+        if not platform:
+            platform = "unknown"
+
+        message_type = str(record.get("message_type", "group")).strip().lower()
+        if message_type not in VALID_MESSAGE_TYPES:
+            message_type = "group"
+
+        message_str = record.get("message_str")
+        if message_str is not None:
+            message_str = str(message_str)[:MAX_FIELD_LENGTH]
+
+        sender_name = record.get("sender_name")
+        if sender_name is not None:
+            sender_name = str(sender_name)[:256]
+
+        message_chain = record.get("message_chain")
+        if message_chain is not None:
+            if not isinstance(message_chain, (list, dict)):
+                try:
+                    message_chain = json.loads(str(message_chain))
+                except (json.JSONDecodeError, TypeError):
+                    message_chain = None
+
+        raw_message = record.get("raw_message")
+        if raw_message is not None:
+            if not isinstance(raw_message, (list, dict)):
+                try:
+                    raw_message = json.loads(str(raw_message))
+                except (json.JSONDecodeError, TypeError):
+                    raw_message = None
+
+        return {
+            "platform": platform,
+            "message_id": str(record.get("message_id", ""))[:128],
+            "session_id": str(record.get("session_id", ""))[:128],
+            "group_id": str(record.get("group_id"))[:128] if record.get("group_id") else None,
+            "sender_id": str(record.get("sender_id", ""))[:128],
+            "sender_name": sender_name,
+            "message_type": message_type,
+            "message_str": message_str,
+            "message_chain": message_chain,
+            "raw_message": raw_message,
+            "timestamp": record.get("timestamp"),
+            "created_at": record.get("created_at"),
+        }
+
     task = _import_tasks.get(task_id)
     if not task:
         return
@@ -1183,20 +1439,25 @@ async def execute_import_task(task_id: str, db: Database, file_path: str, mode: 
             task["processed"] = i + 1
 
             try:
-                normalized_timestamp = normalize_timestamp(record.get("timestamp"))
-                normalized_created_at = normalize_timestamp(record.get("created_at"))
+                sanitized = sanitize_import_record(record)
+                if sanitized is None:
+                    errors += 1
+                    continue
+
+                normalized_timestamp = normalize_timestamp(sanitized["timestamp"])
+                normalized_created_at = normalize_timestamp(sanitized["created_at"])
 
                 msg_record = MessageRecord(
-                    platform=record.get("platform", "unknown"),
-                    message_id=record.get("message_id", ""),
-                    session_id=record.get("session_id", ""),
-                    group_id=record.get("group_id"),
-                    sender_id=record.get("sender_id", ""),
-                    sender_name=record.get("sender_name"),
-                    message_type=record.get("message_type", "group"),
-                    message_str=record.get("message_str"),
-                    message_chain=json.dumps(record.get("message_chain")) if record.get("message_chain") else None,
-                    raw_message=json.dumps(record.get("raw_message")) if record.get("raw_message") else None,
+                    platform=sanitized["platform"],
+                    message_id=sanitized["message_id"],
+                    session_id=sanitized["session_id"],
+                    group_id=sanitized["group_id"],
+                    sender_id=sanitized["sender_id"],
+                    sender_name=sanitized["sender_name"],
+                    message_type=sanitized["message_type"],
+                    message_str=sanitized["message_str"],
+                    message_chain=json.dumps(sanitized["message_chain"]) if sanitized["message_chain"] else None,
+                    raw_message=json.dumps(sanitized["raw_message"]) if sanitized["raw_message"] else None,
                     timestamp=normalized_timestamp,
                     created_at=normalized_created_at
                 )
@@ -1216,10 +1477,7 @@ async def execute_import_task(task_id: str, db: Database, file_path: str, mode: 
         task["media_restored"] = media_restored
         task["completed_at"] = time.time()
 
-        try:
-            os.remove(file_path)
-        except OSError as e:
-            logger.debug(f"[MessageRecorder Web] 清理导入临时文件失败: {file_path}, {e}")
+        _safe_remove_file(file_path)
 
         logger.info(
             f"[MessageRecorder Web] 导入任务 {task_id} 完成: "
@@ -1326,11 +1584,7 @@ async def cleanup_expired_export_files():
 
                     file_path = task.get("file_path")
                     if file_path and os.path.exists(file_path):
-                        try:
-                            os.remove(file_path)
-                            logger.debug(f"[MessageRecorder Web] 已清理过期导出文件: {file_path}")
-                        except Exception as e:
-                            logger.warning(f"[MessageRecorder Web] 清理导出文件失败: {e}")
+                        _safe_remove_file(file_path)
 
             for task_id in expired_tasks:
                 _export_tasks.pop(task_id, None)

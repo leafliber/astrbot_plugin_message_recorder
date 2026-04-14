@@ -33,6 +33,7 @@ class MessageRecorder(Star):
         self._media_downloader: Optional[MediaDownloader] = None
         self._cleanup_task: Optional[asyncio.Task] = None
         self._web_panel_registered: bool = False
+        self._pending_tasks: set = set()
 
     async def initialize(self):
         """插件初始化"""
@@ -61,6 +62,12 @@ class MessageRecorder(Star):
 
     async def terminate(self):
         """插件终止"""
+        if self._pending_tasks:
+            for task in self._pending_tasks:
+                task.cancel()
+            await asyncio.gather(*self._pending_tasks, return_exceptions=True)
+            self._pending_tasks.clear()
+
         if self._cleanup_task:
             self._cleanup_task.cancel()
             try:
@@ -205,10 +212,11 @@ class MessageRecorder(Star):
         """
         if not self._db:
             logger.debug("[MessageRecorder] 跳过消息: 数据库未初始化")
-            return  # 不拦截，让事件继续
+            return
 
-        # 使用 create_task 异步执行保存，避免阻塞事件处理
-        asyncio.create_task(self._save_message_async(event))
+        task = asyncio.create_task(self._save_message_async(event))
+        self._pending_tasks.add(task)
+        task.add_done_callback(self._pending_tasks.discard)
 
     async def _save_message_async(self, event: AstrMessageEvent):
         """异步保存消息，不阻塞事件处理"""
