@@ -34,6 +34,8 @@ class MessageRecorder(Star):
         self._cleanup_task: Optional[asyncio.Task] = None
         self._web_panel_registered: bool = False
         self._pending_tasks: set = set()
+        self._initialized: bool = False
+        self._init_error: Optional[str] = None
 
     async def initialize(self):
         """插件初始化"""
@@ -56,9 +58,22 @@ class MessageRecorder(Star):
 
             self._start_cleanup_task()
             await self._register_web_panel()
+            self._initialized = True
             logger.info("[MessageRecorder] 插件初始化完成")
         except Exception as e:
+            self._initialized = False
+            self._init_error = str(e)
+            self._db = None
+            self._api = None
+            self._media_downloader = None
             logger.error(f"[MessageRecorder] 初始化失败: {e}")
+
+    def _check_initialized(self) -> bool:
+        """检查插件是否已成功初始化"""
+        if not self._initialized:
+            logger.warning(f"[MessageRecorder] 插件未初始化或初始化失败: {self._init_error}")
+            return False
+        return True
 
     async def terminate(self):
         """插件终止"""
@@ -210,8 +225,7 @@ class MessageRecorder(Star):
         监听所有消息事件并保存到数据库
         注意：此监听器不应拦截消息，让事件继续传递
         """
-        if not self._db:
-            logger.debug("[MessageRecorder] 跳过消息: 数据库未初始化")
+        if not self._check_initialized():
             return
 
         task = asyncio.create_task(self._save_message_async(event))
@@ -244,11 +258,22 @@ class MessageRecorder(Star):
                 message_chain = message_obj.message
                 if message_chain:
                     chain_data = []
+                    download_tasks = []
+                    components_with_data = []
+
                     for comp in message_chain:
                         comp_data = self._serialize_component(comp)
-                        if self._media_downloader and self.config.get("save_media_files", False):
-                            await self._download_media_for_component(comp, comp_data)
                         chain_data.append(comp_data)
+                        if self._media_downloader and self.config.get("save_media_files", False):
+                            components_with_data.append((comp, comp_data))
+
+                    if components_with_data:
+                        download_tasks = [
+                            self._download_media_for_component(comp, comp_data)
+                            for comp, comp_data in components_with_data
+                        ]
+                        await asyncio.gather(*download_tasks, return_exceptions=True)
+
                     record.message_chain = json.dumps(chain_data)
 
             if self.config.get("save_raw_message", False):

@@ -153,7 +153,7 @@ class MediaDownloader:
             logger.warning(f"[MediaDownloader] 下载超时: {url[:100]}")
             return None
         except Exception as e:
-            logger.error(f"[MediaDownloader] 下载出错: {e}")
+            logger.warning(f"[MediaDownloader] 下载出错: {e}")
             return None
 
     def _create_thumbnail(self, image_data: bytes) -> bytes:

@@ -416,6 +416,91 @@ class Database:
 
         return records
 
+    async def query_messages_batch(
+        self,
+        query_filter: QueryFilter,
+        batch_size: int = 500
+    ):
+        """分批查询消息，返回异步生成器，避免内存溢出"""
+        from typing import AsyncGenerator
+
+        where_clause, params = self._build_where_clause(query_filter)
+        order_clause = "timestamp DESC" if query_filter.is_desc_order() else "timestamp ASC"
+
+        total_limit = query_filter.limit if query_filter.limit and query_filter.limit > 0 else None
+        offset_val = max(0, int(query_filter.offset) if query_filter.offset else 0)
+
+        use_fts = False
+        if query_filter.keyword and await self._fts_available():
+            use_fts = True
+            fts_keyword = self._build_fts_keyword(query_filter.keyword)
+            like_clause = "message_str LIKE ? ESCAPE '\\'"
+            fts_clause = "id IN (SELECT rowid FROM messages_fts WHERE messages_fts MATCH ?)"
+            where_clause = where_clause.replace(like_clause, fts_clause)
+            keyword_escaped = str(query_filter.keyword).replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+            like_param = f"%{keyword_escaped}%"
+            if like_param in params:
+                params[params.index(like_param)] = fts_keyword
+
+        select_columns = """
+            id, platform, message_id, session_id, group_id,
+            sender_id, sender_name, message_type,
+            message_str, message_chain, raw_message,
+            timestamp, created_at
+        """
+
+        current_offset = offset_val
+        total_fetched = 0
+
+        while True:
+            if total_limit is not None and total_fetched >= total_limit:
+                break
+
+            current_batch_size = batch_size
+            if total_limit is not None:
+                remaining = total_limit - total_fetched
+                current_batch_size = min(batch_size, remaining)
+
+            sql = f"""
+                SELECT {select_columns}
+                FROM messages
+                WHERE {where_clause}
+                ORDER BY {order_clause}
+                LIMIT ? OFFSET ?
+            """
+            batch_params = params + [current_batch_size, current_offset]
+
+            async with self._lock:
+                cursor = await self._db.execute(sql, batch_params)
+                rows = await cursor.fetchall()
+
+            if not rows:
+                break
+
+            for row in rows:
+                record = MessageRecord(
+                    id=row[0],
+                    platform=row[1],
+                    message_id=row[2],
+                    session_id=row[3],
+                    group_id=row[4],
+                    sender_id=row[5],
+                    sender_name=row[6],
+                    message_type=row[7],
+                    message_str=row[8],
+                    message_chain=row[9],
+                    raw_message=row[10],
+                    timestamp=row[11],
+                    created_at=row[12],
+                )
+                yield record
+                total_fetched += 1
+
+            if len(rows) < current_batch_size:
+                break
+
+            current_offset += batch_size
+
     async def get_message_by_id(self, message_id: int) -> Optional[MessageRecord]:
         """根据数据库 ID 获取单条消息"""
         async with self._lock:
@@ -499,6 +584,28 @@ class Database:
                 created_at=row[12],
             )
         return None
+
+    async def get_existing_message_ids(
+        self,
+        message_ids: List[str],
+        platform: str
+    ) -> set:
+        """批量查询已存在的消息ID，返回已存在的ID集合"""
+        if not message_ids:
+            return set()
+
+        placeholders = ",".join("?" * len(message_ids))
+        sql = f"""
+            SELECT message_id FROM messages
+            WHERE message_id IN ({placeholders}) AND platform = ?
+        """
+        params = list(message_ids) + [platform]
+
+        async with self._lock:
+            cursor = await self._db.execute(sql, params)
+            rows = await cursor.fetchall()
+
+        return {row[0] for row in rows}
 
     async def get_context_messages(
         self,
@@ -608,18 +715,22 @@ class Database:
             f"cutoff_timestamp={cutoff_time}"
         )
 
-        async with self._lock:
-            cursor = await self._db.execute(
-                "DELETE FROM messages WHERE timestamp < ?",
-                (cutoff_time,)
-            )
-            await self._db.commit()
-            deleted = cursor.rowcount
+        try:
+            async with self._lock:
+                cursor = await self._db.execute(
+                    "DELETE FROM messages WHERE timestamp < ?",
+                    (cutoff_time,)
+                )
+                await self._db.commit()
+                deleted = cursor.rowcount
 
-        if deleted > 0:
-            logger.debug(f"[MessageRecorder] 按时间清理了 {deleted} 条记录")
+            if deleted > 0:
+                logger.debug(f"[MessageRecorder] 按时间清理了 {deleted} 条记录")
 
-        return deleted
+            return deleted
+        except aiosqlite.Error as e:
+            logger.error(f"[MessageRecorder] 按时间清理失败: {e}")
+            return 0
 
     async def cleanup_by_limit(self, max_records: int) -> int:
         """清理超出数量限制的旧消息，返回清理数量"""
