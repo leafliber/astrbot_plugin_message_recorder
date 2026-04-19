@@ -156,8 +156,10 @@ from astrbot.api.star import Context
 async def get_message_recorder_api(context: Context):
     """获取消息记录器 API"""
     recorder = context.get_registered_star("astrbot_plugin_message_recorder")
-    if recorder and hasattr(recorder, "get_api"):
-        return recorder.get_api()
+    if recorder:
+        plugin_instance = getattr(recorder, "star_cls", None)
+        if plugin_instance and hasattr(plugin_instance, "get_api"):
+            return plugin_instance.get_api()
     return None
 ```
 
