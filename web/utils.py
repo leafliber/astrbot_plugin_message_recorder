@@ -209,6 +209,12 @@ def build_query_filter(args: Dict[str, Any]) -> QueryFilter:
 
 
 def build_query_filter_from_dict(data: Dict[str, Any]) -> QueryFilter:
+    limit_val = data.get("limit")
+    if limit_val is None or limit_val == 0:
+        effective_limit = -1
+    else:
+        effective_limit = int(limit_val)
+
     return QueryFilter(
         platform=data.get("platform"),
         platforms=data.get("platforms"),
@@ -223,7 +229,7 @@ def build_query_filter_from_dict(data: Dict[str, Any]) -> QueryFilter:
         start_time=data.get("start_time"),
         end_time=data.get("end_time"),
         keyword=data.get("keyword"),
-        limit=min(data.get("limit", 1000), 10000),
+        limit=effective_limit,
         offset=data.get("offset", 0),
         order=data.get("order", "desc")
     )

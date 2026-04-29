@@ -218,41 +218,57 @@ async def _export_with_media_streaming(
 ) -> Path:
     media_base = Path(get_astrbot_plugin_data_path()) / PLUGIN_DIR_NAME / "media"
 
-    messages_data: List[dict] = []
+    temp_json_path = export_dir / f"{task_id}_temp.json"
     media_files_collected: List[str] = []
     count = 0
 
-    async for msg in db.query_messages_batch(query_filter):
-        msg_dict = format_message_for_export(msg, include_chain, include_raw)
+    with open(temp_json_path, "w", encoding="utf-8") as f:
+        f.write("{\n")
+        f.write('  "export_info": {\n')
+        f.write('    "plugin": "astrbot_plugin_message_recorder",\n')
+        f.write('    "version": "1.0.0",\n')
+        f.write(f'    "export_time": {int(time.time() * 1000)},\n')
+        f.write(f'    "filters": {json.dumps(task["filter"], ensure_ascii=False)},\n')
+        f.write('    "total_records": "PENDING",\n')
+        f.write('    "include_media": true\n')
+        f.write("  },\n")
+        f.write('  "messages": [\n')
 
-        if include_chain:
-            chain = msg_dict.get("message_chain")
-            if isinstance(chain, list):
-                for comp in chain:
-                    if isinstance(comp, dict) and "local_path" in comp:
-                        lp = comp["local_path"]
-                        if isinstance(lp, str) and lp:
-                            media_files_collected.append(lp)
+        first = True
+        async for msg in db.query_messages_batch(query_filter):
+            msg_dict = format_message_for_export(msg, include_chain, include_raw)
 
-        messages_data.append(msg_dict)
-        count += 1
+            if include_chain:
+                chain = msg_dict.get("message_chain")
+                if isinstance(chain, list):
+                    for comp in chain:
+                        if isinstance(comp, dict) and "local_path" in comp:
+                            lp = comp["local_path"]
+                            if isinstance(lp, str) and lp:
+                                media_files_collected.append(lp)
 
-    export_data = {
-        "export_info": {
-            "plugin": "astrbot_plugin_message_recorder",
-            "version": "1.0.0",
-            "export_time": int(time.time() * 1000),
-            "filters": task["filter"],
-            "total_records": count,
-            "include_media": True,
-        },
-        "messages": messages_data,
-    }
+            if not first:
+                f.write(",\n")
+            first = False
 
-    pkg_path = export_dir / f"{task_id}.mrpkg"
+            f.write("    ")
+            f.write(json.dumps(msg_dict, ensure_ascii=False))
+            count += 1
+
+        f.write("\n  ]\n")
+        f.write("}")
+
+    with open(temp_json_path, "r+", encoding="utf-8") as f:
+        content = f.read()
+        content = content.replace('"total_records": "PENDING"', f'"total_records": {count}')
+        f.seek(0)
+        f.write(content)
+        f.truncate()
+
+    pkg_path = export_dir / f"{task_id}.zip"
 
     with zipfile.ZipFile(pkg_path, "w", zipfile.ZIP_DEFLATED) as zf:
-        zf.writestr("data.json", json.dumps(export_data, ensure_ascii=False, indent=2))
+        zf.write(temp_json_path, "data.json")
 
         for rel_path in media_files_collected:
             abs_path = media_base / rel_path
@@ -263,6 +279,8 @@ async def _export_with_media_streaming(
                     logger.warning(
                         f"[MessageRecorder Web] 打包媒体文件失败 {rel_path}: {e}"
                     )
+
+    safe_remove_file(str(temp_json_path))
 
     task["actual_count"] = count
     task["media_count"] = len(media_files_collected)

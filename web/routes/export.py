@@ -97,4 +97,22 @@ def register_export_routes(bp: Blueprint, get_db):
         if not file_path or not os.path.exists(file_path):
             return jsonify({"success": False, "error": "文件不存在"}), 404
 
-        return await send_file(file_path)
+        format_type = task.get("format", "json")
+        ext = "zip" if format_type == "json" and task.get("options", {}).get("include_media") else format_type
+        timestamp = time.strftime("%Y%m%d_%H%M%S", time.localtime(completed_at))
+        filename = f"messages_export_{timestamp}.{ext}"
+
+        mime_types = {
+            "json": "application/json",
+            "csv": "text/csv",
+            "txt": "text/plain",
+            "zip": "application/zip"
+        }
+        mimetype = mime_types.get(ext, "application/octet-stream")
+
+        return await send_file(
+            file_path,
+            mimetype=mimetype,
+            as_attachment=True,
+            attachment_filename=filename
+        )
