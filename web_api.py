@@ -366,22 +366,32 @@ def register_all_web_apis(context, db: Database):
             logger.error(f"[MessageRecorder Web] 查询消息失败: {e}")
             return jsonify({"success": False, "error": str(e)}), 500
 
-    async def api_message_detail(message_id: int):
+    async def api_message_detail():
         if not db:
             return jsonify({"success": False, "error": "数据库未初始化"}), 500
         try:
+            message_id_str = request.args.get("id") or request.args.get("message_id")
+            if not message_id_str:
+                return jsonify({"success": False, "error": "缺少消息ID"}), 400
+            message_id = int(message_id_str)
             message = await db.get_message_by_id(message_id)
             if not message:
                 return jsonify({"success": False, "error": "消息不存在"}), 404
             return jsonify({"success": True, "data": _format_message_detail(message)})
+        except ValueError:
+            return jsonify({"success": False, "error": "消息ID格式无效"}), 400
         except Exception as e:
             logger.error(f"[MessageRecorder Web] 获取消息详情失败: {e}")
             return jsonify({"success": False, "error": str(e)}), 500
 
-    async def api_message_context(message_id: int):
+    async def api_message_context():
         if not db:
             return jsonify({"success": False, "error": "数据库未初始化"}), 500
         try:
+            message_id_str = request.args.get("id") or request.args.get("message_id")
+            if not message_id_str:
+                return jsonify({"success": False, "error": "缺少消息ID"}), 400
+            message_id = int(message_id_str)
             before = int(request.args.get("before", 5))
             after = int(request.args.get("after", 5))
             context = await db.get_context_messages(message_id, before, after)
@@ -394,6 +404,8 @@ def register_all_web_apis(context, db: Database):
                     "after": [_format_message(m) for m in context["after"]],
                 },
             })
+        except ValueError:
+            return jsonify({"success": False, "error": "消息ID格式无效"}), 400
         except Exception as e:
             logger.error(f"[MessageRecorder Web] 获取消息上下文失败: {e}")
             return jsonify({"success": False, "error": str(e)}), 500
@@ -466,13 +478,19 @@ def register_all_web_apis(context, db: Database):
             logger.error(f"[MessageRecorder Web] 创建导出任务失败: {e}")
             return jsonify({"success": False, "error": str(e)}), 500
 
-    async def api_export_status(task_id: str):
+    async def api_export_status():
+        task_id = request.args.get("task_id")
+        if not task_id:
+            return jsonify({"success": False, "error": "缺少任务ID"}), 400
         task = _export_tasks.get(task_id)
         if not task:
             return jsonify({"success": False, "error": "任务不存在"}), 404
         return jsonify({"success": True, "data": task})
 
-    async def api_export_download(task_id: str):
+    async def api_export_download():
+        task_id = request.args.get("task_id")
+        if not task_id:
+            return jsonify({"success": False, "error": "缺少任务ID"}), 400
         task = _export_tasks.get(task_id)
         if not task:
             return jsonify({"success": False, "error": "任务不存在"}), 404
@@ -595,8 +613,13 @@ def register_all_web_apis(context, db: Database):
             logger.error(f"[MessageRecorder Web] 初始化分片上传失败: {e}")
             return jsonify({"success": False, "error": str(e)}), 500
 
-    async def api_import_chunk(session_id: str, chunk_index: int):
+    async def api_import_chunk():
         try:
+            session_id = request.args.get("session_id")
+            chunk_index_str = request.args.get("chunk_index")
+            if not session_id or chunk_index_str is None:
+                return jsonify({"success": False, "error": "缺少session_id或chunk_index"}), 400
+            chunk_index = int(chunk_index_str)
             session = _chunk_sessions.get(session_id)
             if not session:
                 return jsonify({"success": False, "error": "上传会话不存在或已过期"}), 404
@@ -694,7 +717,10 @@ def register_all_web_apis(context, db: Database):
             logger.error(f"[MessageRecorder Web] 完成分片上传失败: {e}")
             return jsonify({"success": False, "error": str(e)}), 500
 
-    async def api_import_status(task_id: str):
+    async def api_import_status():
+        task_id = request.args.get("task_id")
+        if not task_id:
+            return jsonify({"success": False, "error": "缺少任务ID"}), 400
         task = _import_tasks.get(task_id)
         if not task:
             return jsonify({"success": False, "error": "任务不存在"}), 404
@@ -737,7 +763,10 @@ def register_all_web_apis(context, db: Database):
             logger.error(f"[MessageRecorder Web] 获取群组列表失败: {e}")
             return jsonify({"success": False, "error": str(e)}), 500
 
-    async def api_media(rel_path: str):
+    async def api_media():
+        rel_path = request.args.get("path")
+        if not rel_path:
+            return jsonify({"success": False, "error": "缺少文件路径"}), 400
         media_base = Path(get_astrbot_plugin_data_path()) / PLUGIN_DIR_NAME / "media"
         file_path = media_base / rel_path
         resolved_base = media_base.resolve()
@@ -759,21 +788,21 @@ def register_all_web_apis(context, db: Database):
     context.register_web_api(f"{prefix}/stats/senders", api_stats_senders, ["GET"], "获取发送者排行")
     context.register_web_api(f"{prefix}/stats/groups", api_stats_groups, ["GET"], "获取群组排行")
     context.register_web_api(f"{prefix}/messages", api_messages, ["GET"], "查询消息列表")
-    context.register_web_api(f"{prefix}/messages/<int:message_id>", api_message_detail, ["GET"], "获取消息详情")
-    context.register_web_api(f"{prefix}/messages/<int:message_id>/context", api_message_context, ["GET"], "获取消息上下文")
+    context.register_web_api(f"{prefix}/message/detail", api_message_detail, ["GET"], "获取消息详情")
+    context.register_web_api(f"{prefix}/message/context", api_message_context, ["GET"], "获取消息上下文")
     context.register_web_api(f"{prefix}/search", api_search, ["GET"], "搜索消息")
     context.register_web_api(f"{prefix}/export", api_export, ["POST"], "创建导出任务")
-    context.register_web_api(f"{prefix}/export/status/<task_id>", api_export_status, ["GET"], "查询导出状态")
-    context.register_web_api(f"{prefix}/export/download/<task_id>", api_export_download, ["GET"], "下载导出文件")
+    context.register_web_api(f"{prefix}/export/status", api_export_status, ["GET"], "查询导出状态")
+    context.register_web_api(f"{prefix}/export/download", api_export_download, ["GET"], "下载导出文件")
     context.register_web_api(f"{prefix}/import/upload", api_import_upload, ["POST"], "简单文件导入")
     context.register_web_api(f"{prefix}/import/init", api_import_init, ["POST"], "初始化分片导入")
-    context.register_web_api(f"{prefix}/import/chunk/<session_id>/<int:chunk_index>", api_import_chunk, ["POST"], "上传分片")
+    context.register_web_api(f"{prefix}/import/chunk", api_import_chunk, ["POST"], "上传分片")
     context.register_web_api(f"{prefix}/import/complete", api_import_complete, ["POST"], "完成分片导入")
-    context.register_web_api(f"{prefix}/import/status/<task_id>", api_import_status, ["GET"], "查询导入状态")
+    context.register_web_api(f"{prefix}/import/status", api_import_status, ["GET"], "查询导入状态")
     context.register_web_api(f"{prefix}/platforms", api_platforms, ["GET"], "获取平台列表")
     context.register_web_api(f"{prefix}/senders", api_senders, ["GET"], "获取发送者列表")
     context.register_web_api(f"{prefix}/groups", api_groups, ["GET"], "获取群组列表")
-    context.register_web_api(f"{prefix}/media/<path:rel_path>", api_media, ["GET"], "获取媒体文件")
+    context.register_web_api(f"{prefix}/media", api_media, ["GET"], "获取媒体文件")
 
     logger.info(f"[MessageRecorder] 已注册 {20} 个 Web API")
 

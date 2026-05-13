@@ -3,18 +3,93 @@ const bridge = window.AstrBotPluginPage;
 const PLUGIN_NAME = 'astrbot_plugin_message_recorder';
 
 let bridgeReady = false;
+let pluginContext = null;
+
+const DEBUG = new URLSearchParams(window.location.search).has('debug');
+
+function log(...args) {
+  if (DEBUG) console.log('[MessageRecorder]', ...args);
+}
+
+function logError(...args) {
+  console.error('[MessageRecorder]', ...args);
+}
+
+async function apiGet(endpoint, params) {
+  if (!bridge || !bridgeReady) {
+    logError('Bridge not ready for apiGet:', endpoint);
+    return { success: false, error: 'Bridge SDK 未就绪' };
+  }
+  try {
+    log('apiGet:', endpoint, params);
+    const result = await bridge.apiGet(endpoint, params);
+    log('apiGet response:', endpoint, result);
+    return result;
+  } catch (e) {
+    logError('apiGet failed:', endpoint, e);
+    return { success: false, error: e.message || String(e) };
+  }
+}
+
+async function apiPost(endpoint, body) {
+  if (!bridge || !bridgeReady) {
+    logError('Bridge not ready for apiPost:', endpoint);
+    return { success: false, error: 'Bridge SDK 未就绪' };
+  }
+  try {
+    log('apiPost:', endpoint, body);
+    const result = await bridge.apiPost(endpoint, body);
+    log('apiPost response:', endpoint, result);
+    return result;
+  } catch (e) {
+    logError('apiPost failed:', endpoint, e);
+    return { success: false, error: e.message || String(e) };
+  }
+}
+
+function showInitError(message) {
+  const main = document.querySelector('.main-content');
+  if (main) {
+    const existing = document.getElementById('initError');
+    if (existing) existing.remove();
+    const div = document.createElement('div');
+    div.id = 'initError';
+    div.style.cssText = 'padding:2rem;text-align:center;color:#e74c3c;';
+    div.innerHTML = `<h3>⚠️ 初始化失败</h3><p>${message}</p><p style="color:#999;font-size:0.85rem;">请确保 AstrBot 版本支持 Plugin Pages 功能（v4.23+），并刷新页面重试。</p>`;
+    main.prepend(div);
+  }
+}
 
 async function init() {
-  await bridge.ready();
-  bridgeReady = true;
-  initRouter();
-  initDashboard();
-  initSearch();
-  initExport();
-  initImport();
-  initModal();
-  initNavToggle();
-  navigateToDefault();
+  if (!bridge) {
+    logError('window.AstrBotPluginPage is not available');
+    showInitError('Bridge SDK 未加载 (window.AstrBotPluginPage 未定义)');
+    return;
+  }
+
+  try {
+    pluginContext = await bridge.ready();
+    bridgeReady = true;
+    log('Bridge ready, context:', pluginContext);
+  } catch (e) {
+    logError('bridge.ready() failed:', e);
+    showInitError(`Bridge 初始化失败: ${e.message || e}`);
+    return;
+  }
+
+  try {
+    initRouter();
+    initDashboard();
+    initSearch();
+    initExport();
+    initImport();
+    initModal();
+    initNavToggle();
+    navigateToDefault();
+  } catch (e) {
+    logError('init failed:', e);
+    showInitError(`初始化失败: ${e.message || e}`);
+  }
 }
 
 function initRouter() {
@@ -197,14 +272,18 @@ function initDashboard() {
 async function loadDashboardData() {
   showLoading();
   try {
-    const statsResult = await bridge.apiGet('stats');
+    const statsResult = await apiGet('stats');
     if (statsResult.success) {
       updateStatsCards(statsResult.data);
       updatePlatformChart(statsResult.data.platform_stats);
+    } else {
+      logError('Failed to load stats:', statsResult.error);
     }
-    const timelineResult = await bridge.apiGet('stats/timeline', { interval: 'day' });
+    const timelineResult = await apiGet('stats/timeline', { interval: 'day' });
     if (timelineResult.success) {
       updateTimelineChart(timelineResult.data.points);
+    } else {
+      logError('Failed to load timeline:', timelineResult.error);
     }
     updateTimeRangeDisplay(currentTimeRange);
     await loadRankingData();
@@ -214,10 +293,10 @@ async function loadDashboardData() {
 }
 
 async function loadRankingData() {
-  const senderResult = await bridge.apiGet('stats/senders', { limit: 10, time: currentTimeRange });
+  const senderResult = await apiGet('stats/senders', { limit: 10, time: currentTimeRange });
   if (senderResult.success) updateSenderChart(senderResult.data.senders);
 
-  const groupResult = await bridge.apiGet('stats/groups', { limit: 10, time: currentTimeRange });
+  const groupResult = await apiGet('stats/groups', { limit: 10, time: currentTimeRange });
   if (groupResult.success) updateGroupChart(groupResult.data.groups);
 }
 
@@ -390,7 +469,7 @@ async function loadSearchData() {
 }
 
 async function loadPlatforms() {
-  const result = await bridge.apiGet('platforms');
+  const result = await apiGet('platforms');
   if (!result.success) return;
 
   const selects = ['platformFilter', 'exportPlatform'];
@@ -410,7 +489,7 @@ async function loadPlatforms() {
 }
 
 async function loadGroups(platform) {
-  const result = await bridge.apiGet('groups', { platform, limit: 100 });
+  const result = await apiGet('groups', { platform, limit: 100 });
   if (!result.success) return;
   const el = document.getElementById('groupFilter');
   if (!el) return;
@@ -424,7 +503,7 @@ async function loadGroups(platform) {
 }
 
 async function loadSenders(platform) {
-  const result = await bridge.apiGet('senders', { platform, limit: 100 });
+  const result = await apiGet('senders', { platform, limit: 100 });
   if (!result.success) return;
   const el = document.getElementById('senderFilter');
   if (!el) return;
@@ -454,7 +533,7 @@ async function loadMessages() {
     if (endEl?.value) searchFilters.end_time = new Date(endEl.value).getTime();
     else delete searchFilters.end_time;
 
-    const result = await bridge.apiGet('messages', searchFilters);
+    const result = await apiGet('messages', searchFilters);
     if (!result.success) {
       showMessageError(result.error);
       return;
@@ -552,9 +631,9 @@ function hideModal() {
 
 async function showMessageDetail(messageId) {
   showLoading();
-  const result = await bridge.apiGet(`messages/${messageId}`);
+  const result = await apiGet('message/detail', { id: messageId });
   hideLoading();
-  if (!result.success) { showModal(`<p class="text-muted">加载失败: ${result.error}</p>`); return; }
+  if (!result.success) { showModal(`<p class="text-muted">加载失败: ${escapeHtml(result.error)}</p>`); return; }
 
   const msg = result.data;
   showModal(`
@@ -569,92 +648,59 @@ async function showMessageDetail(messageId) {
     ${msg.message_chain?.length ? `
     <div class="detail-section mt-2">
       <h4>消息链</h4>
-      <pre style="background:#f5f6fa;padding:0.5rem;border-radius:4px;overflow-x:auto;font-size:0.85rem;">${escapeHtml(JSON.stringify(msg.message_chain, null, 2))}</pre>
+      ${msg.message_chain.map(c => `<div class="chain-item"><span class="chain-type">${c.type}</span>${c.text ? escapeHtml(c.text) : ''}${c.url ? `<a href="${escapeHtml(c.url)}" target="_blank">[链接]</a>` : ''}${c.local_path ? `<span class="chain-media">[本地文件: ${escapeHtml(c.local_path)}]</span>` : ''}</div>`).join('')}
     </div>` : ''}
-    <div class="message-actions mt-2">
-      <a id="contextLink" data-id="${msg.id}" style="color:var(--primary-color);cursor:pointer;">查看上下文</a>
+    ${msg.raw_message ? `
+    <div class="detail-section mt-2">
+      <h4>原始消息</h4>
+      <pre class="raw-message">${escapeHtml(typeof msg.raw_message === 'string' ? msg.raw_message : JSON.stringify(msg.raw_message, null, 2))}</pre>
+    </div>` : ''}
+    <div class="detail-actions mt-2">
+      <button class="btn" onclick="showMessageContext(${messageId})">查看上下文</button>
     </div>
   `);
-
-  document.getElementById('contextLink')?.addEventListener('click', () => {
-    showMessageContext(msg.id);
-  });
 }
 
 async function showMessageContext(messageId) {
   showLoading();
-  const result = await bridge.apiGet(`messages/${messageId}/context`, { before: 5, after: 5 });
+  const result = await apiGet('message/context', { id: messageId, before: 5, after: 5 });
   hideLoading();
-  if (!result.success) { showModal(`<p class="text-muted">加载失败: ${result.error}</p>`); return; }
+  if (!result.success) { showModal(`<p class="text-muted">加载失败: ${escapeHtml(result.error)}</p>`); return; }
 
   const data = result.data;
-  let content = '<h4>上下文消息</h4>';
-  if (data.before?.length) {
-    content += '<div class="mb-1"><strong>前文:</strong></div>';
-    data.before.forEach(msg => {
-      content += `<div class="context-message"><span class="text-muted">${formatShortTime(msg.timestamp)}</span> <strong>${escapeHtml(msg.sender_name || msg.sender_id)}</strong>: ${escapeHtml(truncate(msg.message_str))}</div>`;
-    });
-  }
-  content += `<div class="context-message highlight"><span class="text-muted">${formatShortTime(data.target.timestamp)}</span> <strong>${escapeHtml(data.target.sender_name || data.target.sender_id)}</strong>: ${escapeHtml(data.target.message_str) || '[非文本消息]'}</div>`;
-  if (data.after?.length) {
-    content += '<div class="mt-2 mb-1"><strong>后文:</strong></div>';
-    data.after.forEach(msg => {
-      content += `<div class="context-message"><span class="text-muted">${formatShortTime(msg.timestamp)}</span> <strong>${escapeHtml(msg.sender_name || msg.sender_id)}</strong>: ${escapeHtml(truncate(msg.message_str))}</div>`;
-    });
-  }
-  showModal(content);
+  const allMsgs = [...(data.before || []), data.target, ...(data.after || [])].filter(Boolean);
+  showModal(`
+    <div class="detail-section">
+      <h4>消息上下文</h4>
+      <div class="context-messages">
+        ${allMsgs.map(m => `
+          <div class="context-msg ${m.id === messageId ? 'context-target' : ''}">
+            <span class="context-time">${formatShortTime(m.timestamp)}</span>
+            <span class="context-sender">${escapeHtml(m.sender_name || m.sender_id)}</span>
+            <span class="context-content">${escapeHtml(truncate(m.message_str, 100)) || '[非文本]'}</span>
+          </div>
+        `).join('')}
+      </div>
+    </div>
+  `);
 }
 
 // ========== Export ==========
 
-let selectedFormat = 'json';
 let exportFilters = {};
+let selectedExportFormat = 'json';
 
 function initExport() {
   document.querySelectorAll('.format-option').forEach(opt => {
     opt.addEventListener('click', () => {
       document.querySelectorAll('.format-option').forEach(o => o.classList.remove('selected'));
       opt.classList.add('selected');
-      selectedFormat = opt.dataset.format;
+      selectedExportFormat = opt.dataset.format;
     });
   });
 
-  const mediaCheckbox = document.getElementById('includeMedia');
-  const mediaNote = document.getElementById('mediaNote');
-  if (mediaCheckbox && mediaNote) {
-    mediaCheckbox.addEventListener('change', () => {
-      mediaNote.style.display = mediaCheckbox.checked ? 'block' : 'none';
-      if (mediaCheckbox.checked && selectedFormat !== 'json') {
-        selectedFormat = 'json';
-        document.querySelectorAll('.format-option').forEach(o => o.classList.remove('selected'));
-        document.querySelector('.format-option[data-format="json"]')?.classList.add('selected');
-      }
-    });
-  }
-
-  const bindExportFilter = (id, key, isTime) => {
-    const el = document.getElementById(id);
-    if (!el) return;
-    el.addEventListener('change', () => {
-      if (el.value) {
-        exportFilters[key] = isTime ? new Date(el.value).getTime() : el.value;
-        if (isTime) delete exportFilters.time;
-      } else {
-        delete exportFilters[key];
-      }
-    });
-  };
-
-  bindExportFilter('exportTime', 'time', false);
-  bindExportFilter('exportPlatform', 'platform', false);
-  bindExportFilter('exportType', 'message_type', false);
-  bindExportFilter('exportStartTime', 'start_time', true);
-  bindExportFilter('exportEndTime', 'end_time', true);
-
-  const keywordEl = document.getElementById('exportKeyword');
-  if (keywordEl) keywordEl.addEventListener('input', () => {
-    if (keywordEl.value.trim()) exportFilters.keyword = keywordEl.value.trim();
-    else delete exportFilters.keyword;
+  document.getElementById('includeMedia')?.addEventListener('change', (e) => {
+    document.getElementById('mediaNote').style.display = e.target.checked ? 'block' : 'none';
   });
 
   document.getElementById('startExport')?.addEventListener('click', startExport);
@@ -666,263 +712,239 @@ async function loadExportData() {
 }
 
 function displayExportFilters() {
-  const container = document.getElementById('currentFilters');
-  if (!container) return;
-  const entries = Object.entries(exportFilters).filter(([, v]) => v);
-  if (!entries.length) { container.innerHTML = ''; return; }
-  container.innerHTML = '<p>当前筛选条件:</p><ul>' +
-    entries.map(([k, v]) => `<li><strong>${k}</strong>: ${v}</li>`).join('') +
-    '</ul>';
+  const el = document.getElementById('currentFilters');
+  if (!el) return;
+  const parts = [];
+  if (exportFilters.keyword) parts.push(`关键词: ${exportFilters.keyword}`);
+  if (exportFilters.platform) parts.push(`平台: ${exportFilters.platform}`);
+  if (exportFilters.message_type) parts.push(`类型: ${exportFilters.message_type === 'group' ? '群聊' : '私聊'}`);
+  el.innerHTML = parts.length ? `<div class="filter-tags">${parts.map(p => `<span class="filter-tag">${p}</span>`).join('')}</div>` : '<p class="text-muted">无筛选条件，将导出全部消息</p>';
 }
 
 async function startExport() {
-  const includeMedia = document.getElementById('includeMedia')?.checked ?? false;
-  if (includeMedia && selectedFormat !== 'json') {
-    alert('包含多媒体文件选项仅支持 JSON 格式导出');
-    return;
-  }
+  const filters = {
+    time: document.getElementById('exportTime')?.value || undefined,
+    platform: document.getElementById('exportPlatform')?.value || undefined,
+    message_type: document.getElementById('exportType')?.value || undefined,
+    start_time: document.getElementById('exportStartTime')?.value ? new Date(document.getElementById('exportStartTime').value).getTime() : undefined,
+    end_time: document.getElementById('exportEndTime')?.value ? new Date(document.getElementById('exportEndTime').value).getTime() : undefined,
+    keyword: document.getElementById('exportKeyword')?.value?.trim() || undefined,
+    ...exportFilters,
+  };
+
+  Object.keys(filters).forEach(k => filters[k] === undefined && delete filters[k]);
 
   const options = {
     include_chain: document.getElementById('includeChain')?.checked ?? true,
     include_raw: document.getElementById('includeRaw')?.checked ?? false,
-    include_media: includeMedia
+    include_media: document.getElementById('includeMedia')?.checked ?? false,
   };
 
-  showLoading();
-  const result = await bridge.apiPost('export', { format: selectedFormat, filters: exportFilters, options });
-  hideLoading();
+  const result = await apiPost('export', { format: selectedExportFormat, filters, options });
+  if (!result.success) {
+    alert('导出失败: ' + result.error);
+    return;
+  }
 
-  if (!result.success) { alert('创建导出任务失败: ' + result.error); return; }
-  showExportProgress(result.data);
-}
-
-function showExportProgress(task) {
-  const container = document.getElementById('exportProgress');
-  if (!container) return;
-  container.style.display = 'block';
-  container.innerHTML = `
-    <div class="card">
-      <h3>导出任务 #${task.task_id}</h3>
-      <p>预计数量: ${task.estimated_count} 条</p>
-      <p>预计大小: ${task.estimated_size}</p>
-      <div class="task-progress"><div class="progress-bar" id="exportProgressBar" style="width: 0%"></div></div>
-      <p id="exportTaskStatus">准备中...</p>
-      <button class="btn btn-success hidden" id="downloadBtn">下载文件</button>
-    </div>
-  `;
+  const task = result.data;
+  document.getElementById('startExport').disabled = true;
   pollExportStatus(task.task_id);
 }
 
 async function pollExportStatus(taskId) {
-  const statusEl = document.getElementById('exportTaskStatus');
-  const progressEl = document.getElementById('exportProgressBar');
-  const downloadBtn = document.getElementById('downloadBtn');
+  const progressEl = document.getElementById('exportProgress');
+  if (progressEl) {
+    progressEl.style.display = 'block';
+    progressEl.innerHTML = '<p>导出中，请稍候...</p>';
+  }
 
-  let status = 'pending';
-  while (status !== 'completed' && status !== 'failed') {
-    await new Promise(r => setTimeout(r, 1000));
-    const result = await bridge.apiGet(`export/status/${taskId}`);
-    if (!result.success) break;
-    status = result.data.status;
-
-    const statusText = { pending: '准备中...', processing: '处理中...', completed: '已完成!', failed: '失败' };
-    if (statusEl) statusEl.textContent = statusText[status] || status;
-    if (progressEl) progressEl.style.width = status === 'completed' ? '100%' : status === 'processing' ? '50%' : '0%';
-
-    if (downloadBtn && status === 'completed') {
-      downloadBtn.classList.remove('hidden');
-      downloadBtn.addEventListener('click', () => {
-        bridge.download(`export/download/${taskId}`, {}, `messages_export.zip`);
-      });
+  const poll = async () => {
+    const result = await apiGet('export/status', { task_id: taskId });
+    if (!result.success) {
+      if (progressEl) progressEl.innerHTML = `<p class="text-muted">查询状态失败: ${escapeHtml(result.error)}</p>`;
+      document.getElementById('startExport').disabled = false;
+      return;
     }
+
+    const task = result.data;
+    if (task.status === 'completed') {
+      if (progressEl) progressEl.innerHTML = `<p>✅ 导出完成！共 ${task.actual_count || 0} 条记录</p><a href="#" id="downloadLink" class="btn btn-success">下载文件</a>`;
+      document.getElementById('downloadLink')?.addEventListener('click', (e) => {
+        e.preventDefault();
+        downloadExportFile(taskId);
+      });
+      document.getElementById('startExport').disabled = false;
+    } else if (task.status === 'failed') {
+      if (progressEl) progressEl.innerHTML = `<p class="text-muted">❌ 导出失败: ${escapeHtml(task.error)}</p>`;
+      document.getElementById('startExport').disabled = false;
+    } else {
+      if (progressEl) progressEl.innerHTML = `<p>导出中... (状态: ${task.status})</p>`;
+      setTimeout(poll, 2000);
+    }
+  };
+
+  await poll();
+}
+
+async function downloadExportFile(taskId) {
+  if (bridge && bridgeReady) {
+    try {
+      await bridge.download('export/download', { task_id: taskId });
+    } catch (e) {
+      logError('download failed:', e);
+      alert('下载失败: ' + (e.message || e));
+    }
+  } else {
+    alert('Bridge SDK 未就绪，无法下载');
   }
 }
 
 // ========== Import ==========
 
-let selectedImportMode = 'merge';
-let selectedImportFile = null;
-const CHUNK_THRESHOLD = 50 * 1024 * 1024;
-const CHUNK_SIZE_JS = 5 * 1024 * 1024;
+let selectedFile = null;
+let importMode = 'merge';
 
 function initImport() {
   const uploadArea = document.getElementById('uploadArea');
   const fileInput = document.getElementById('importFile');
 
-  if (uploadArea && fileInput) {
-    uploadArea.addEventListener('click', () => fileInput.click());
-    uploadArea.addEventListener('dragover', (e) => { e.preventDefault(); uploadArea.classList.add('dragover'); });
-    uploadArea.addEventListener('dragleave', () => uploadArea.classList.remove('dragover'));
-    uploadArea.addEventListener('drop', (e) => {
-      e.preventDefault();
-      uploadArea.classList.remove('dragover');
-      if (e.dataTransfer.files.length > 0) handleFileSelect(e.dataTransfer.files[0]);
-    });
-    fileInput.addEventListener('change', () => {
-      if (fileInput.files.length > 0) handleFileSelect(fileInput.files[0]);
-    });
-  }
+  uploadArea?.addEventListener('click', () => fileInput?.click());
+  uploadArea?.addEventListener('dragover', (e) => { e.preventDefault(); uploadArea.classList.add('drag-over'); });
+  uploadArea?.addEventListener('dragleave', () => uploadArea.classList.remove('drag-over'));
+  uploadArea?.addEventListener('drop', (e) => {
+    e.preventDefault();
+    uploadArea.classList.remove('drag-over');
+    if (e.dataTransfer.files.length) handleFileSelect(e.dataTransfer.files[0]);
+  });
+  fileInput?.addEventListener('change', () => {
+    if (fileInput.files.length) handleFileSelect(fileInput.files[0]);
+  });
 
-  document.querySelectorAll('input[name="importMode"]').forEach(radio => {
-    radio.addEventListener('change', () => { selectedImportMode = radio.value; });
+  document.querySelectorAll('input[name="importMode"]').forEach(r => {
+    r.addEventListener('change', () => { importMode = r.value; });
   });
 
   document.getElementById('startImport')?.addEventListener('click', startImport);
 }
 
 function handleFileSelect(file) {
-  const fileInfo = document.getElementById('fileInfo');
-  if (!fileInfo) return;
-
-  const validFormats = ['.json', '.csv', '.mrpkg'];
-  const fileExt = file.name.substring(file.name.lastIndexOf('.')).toLowerCase();
-  if (!validFormats.includes(fileExt)) {
-    alert('请选择 JSON、CSV 或 MRPKG 格式的文件');
-    return;
+  selectedFile = file;
+  const infoEl = document.getElementById('fileInfo');
+  if (infoEl) {
+    infoEl.style.display = 'block';
+    infoEl.innerHTML = `<p>已选择: <strong>${escapeHtml(file.name)}</strong> (${formatFileSize(file.size)})</p>`;
   }
-
-  fileInfo.style.display = 'block';
-  const formatLabel = fileExt === '.mrpkg' ? 'MRPKG（含媒体文件包）' : fileExt.toUpperCase().slice(1);
-  fileInfo.innerHTML = `
-    <p>已选择文件: <strong>${file.name}</strong></p>
-    <p>文件大小: ${formatFileSize(file.size)}</p>
-    <p>格式: ${formatLabel}</p>
-  `;
-  selectedImportFile = file;
 }
 
 async function startImport() {
-  if (!selectedImportFile) { alert('请先选择要导入的文件'); return; }
-
-  if (selectedImportFile.size > CHUNK_THRESHOLD) {
-    await startChunkedImport(selectedImportFile);
-  } else {
-    await startSimpleImport(selectedImportFile);
+  if (!selectedFile) {
+    alert('请先选择文件');
+    return;
   }
-}
 
-async function startSimpleImport(file) {
-  showLoading();
+  const CHUNK_THRESHOLD = 50 * 1024 * 1024;
+  const progressEl = document.getElementById('importProgress');
+  if (progressEl) {
+    progressEl.style.display = 'block';
+    progressEl.innerHTML = '<p>导入中，请稍候...</p>';
+  }
+  document.getElementById('startImport').disabled = true;
+
   try {
-    const result = await bridge.upload('import/upload', file);
-    hideLoading();
-    if (!result.success) { alert('导入失败: ' + result.error); return; }
-    showImportProgress(result.data);
+    if (selectedFile.size > CHUNK_THRESHOLD) {
+      await chunkedImport(selectedFile, importMode, progressEl);
+    } else {
+      await simpleImport(selectedFile, importMode, progressEl);
+    }
   } catch (e) {
-    hideLoading();
-    alert('导入失败: ' + e.message);
+    logError('import failed:', e);
+    if (progressEl) progressEl.innerHTML = `<p class="text-muted">❌ 导入失败: ${escapeHtml(e.message || e)}</p>`;
+    document.getElementById('startImport').disabled = false;
   }
 }
 
-async function startChunkedImport(file) {
-  const initResult = await bridge.apiPost('import/init', {
+async function simpleImport(file, mode, progressEl) {
+  if (!bridge || !bridgeReady) {
+    throw new Error('Bridge SDK 未就绪');
+  }
+
+  const result = await bridge.upload('import/upload', file);
+  log('simple import result:', result);
+
+  if (progressEl) progressEl.innerHTML = '<p>文件上传完成，处理中...</p>';
+
+  const taskId = result.data?.task_id || result.task_id;
+  if (taskId) {
+    pollImportStatus(taskId, progressEl);
+  } else {
+    if (progressEl) progressEl.innerHTML = `<p>✅ 导入完成</p>`;
+    document.getElementById('startImport').disabled = false;
+  }
+}
+
+async function chunkedImport(file, mode, progressEl) {
+  if (!bridge || !bridgeReady) {
+    throw new Error('Bridge SDK 未就绪');
+  }
+
+  const initResult = await apiPost('import/init', {
     filename: file.name,
     file_size: file.size,
-    mode: selectedImportMode
+    mode: mode,
   });
-  if (!initResult.success) { alert('初始化分片上传失败: ' + initResult.error); return; }
+  if (!initResult.success) throw new Error(initResult.error);
 
-  const { session_id, total_chunks } = initResult.data;
-  showChunkUploadProgress(file.name, total_chunks);
+  const { session_id, total_chunks, chunk_size } = initResult.data;
+  if (progressEl) progressEl.innerHTML = `<p>分片上传中 (0/${total_chunks})...</p>`;
 
-  let uploadedCount = 0;
   for (let i = 0; i < total_chunks; i++) {
-    const start = i * CHUNK_SIZE_JS;
-    const end = Math.min(start + CHUNK_SIZE_JS, file.size);
-    const chunkBlob = file.slice(start, end);
+    const start = i * chunk_size;
+    const end = Math.min(start + chunk_size, file.size);
+    const chunk = file.slice(start, end);
 
-    try {
-      const chunkResult = await bridge.upload(`import/chunk/${session_id}/${i}`, chunkBlob);
-      if (!chunkResult.success) {
-        alert(`上传分片 ${i + 1}/${total_chunks} 失败: ${chunkResult.error}`);
-        return;
-      }
-      uploadedCount++;
-      updateChunkUploadProgress(uploadedCount, total_chunks);
-    } catch (e) {
-      alert(`上传分片 ${i + 1}/${total_chunks} 失败: ${e.message}`);
+    const chunkResult = await bridge.upload(`import/chunk?session_id=${session_id}&chunk_index=${i}`, chunk);
+    log(`chunk ${i} result:`, chunkResult);
+
+    if (progressEl) progressEl.innerHTML = `<p>分片上传中 (${i + 1}/${total_chunks})...</p>`;
+  }
+
+  const completeResult = await apiPost('import/complete', { session_id });
+  if (!completeResult.success) throw new Error(completeResult.error);
+
+  const taskId = completeResult.data?.task_id;
+  if (taskId) {
+    pollImportStatus(taskId, progressEl);
+  } else {
+    if (progressEl) progressEl.innerHTML = `<p>✅ 导入完成</p>`;
+    document.getElementById('startImport').disabled = false;
+  }
+}
+
+async function pollImportStatus(taskId, progressEl) {
+  const poll = async () => {
+    const result = await apiGet('import/status', { task_id: taskId });
+    if (!result.success) {
+      if (progressEl) progressEl.innerHTML = `<p class="text-muted">查询状态失败: ${escapeHtml(result.error)}</p>`;
+      document.getElementById('startImport').disabled = false;
       return;
     }
-  }
 
-  const completeResult = await bridge.apiPost('import/complete', { session_id });
-  if (!completeResult.success) { alert('完成上传失败: ' + completeResult.error); return; }
-  showImportProgress(completeResult.data);
-}
-
-function showChunkUploadProgress(filename, totalChunks) {
-  const container = document.getElementById('importProgress');
-  if (!container) return;
-  container.style.display = 'block';
-  container.innerHTML = `
-    <div class="card">
-      <h3>上传文件: ${escapeHtml(filename)}</h3>
-      <p>使用分片上传，共 ${totalChunks} 个分片</p>
-      <div class="task-progress" style="margin:1rem 0;"><div class="progress-bar" id="chunkProgressBar" style="width:0%;transition:width 0.3s ease;"></div></div>
-      <p id="chunkProgressText">已上传: 0 / ${totalChunks} 分片 (0%)</p>
-    </div>
-  `;
-}
-
-function updateChunkUploadProgress(uploaded, total) {
-  const percent = Math.round((uploaded / total) * 100);
-  const bar = document.getElementById('chunkProgressBar');
-  const text = document.getElementById('chunkProgressText');
-  if (bar) bar.style.width = percent + '%';
-  if (text) text.textContent = `已上传: ${uploaded} / ${total} 分片 (${percent}%)`;
-}
-
-function showImportProgress(task) {
-  const container = document.getElementById('importProgress');
-  if (!container) return;
-  container.style.display = 'block';
-  container.innerHTML = `
-    <div class="card">
-      <h3>导入任务 #${task.task_id}</h3>
-      <p>文件: ${escapeHtml(task.filename)}</p>
-      <p>模式: ${task.mode === 'merge' ? '合并' : task.mode === 'skip_duplicates' ? '跳过重复' : '替换'}</p>
-      <div class="task-stats">
-        <div class="task-stat"><div class="task-stat-value" id="importProcessed">0</div><div class="task-stat-label">已处理</div></div>
-        <div class="task-stat"><div class="task-stat-value" id="importImported">0</div><div class="task-stat-label">已导入</div></div>
-        <div class="task-stat"><div class="task-stat-value" id="importSkipped">0</div><div class="task-stat-label">已跳过</div></div>
-        <div class="task-stat"><div class="task-stat-value" id="importErrors">0</div><div class="task-stat-label">错误</div></div>
-        <div class="task-stat"><div class="task-stat-value" id="importMediaRestored">0</div><div class="task-stat-label">媒体文件</div></div>
-      </div>
-      <div class="task-progress"><div class="progress-bar" id="importProgressBar" style="width:0%"></div></div>
-      <p id="importTaskStatus">准备中...</p>
-    </div>
-  `;
-  pollImportStatus(task.task_id);
-}
-
-async function pollImportStatus(taskId) {
-  const statusEl = document.getElementById('importTaskStatus');
-  const progressEl = document.getElementById('importProgressBar');
-
-  let status = 'pending';
-  while (status !== 'completed' && status !== 'failed') {
-    await new Promise(r => setTimeout(r, 500));
-    const result = await bridge.apiGet(`import/status/${taskId}`);
-    if (!result.success) break;
     const task = result.data;
-    status = task.status;
-
-    const statusText = { pending: '准备中...', processing: '处理中...', completed: '已完成!', failed: '失败: ' + (task.error || '') };
-    if (statusEl) statusEl.textContent = statusText[status] || status;
-
-    const el = (id) => document.getElementById(id);
-    if (el('importProcessed')) el('importProcessed').textContent = task.processed || 0;
-    if (el('importImported')) el('importImported').textContent = task.imported || 0;
-    if (el('importSkipped')) el('importSkipped').textContent = task.skipped || 0;
-    if (el('importErrors')) el('importErrors').textContent = task.errors || 0;
-    if (el('importMediaRestored')) el('importMediaRestored').textContent = task.media_restored || 0;
-
-    if (progressEl && task.total_records > 0) {
-      progressEl.style.width = Math.round((task.processed / task.total_records) * 100) + '%';
+    if (task.status === 'completed') {
+      if (progressEl) progressEl.innerHTML = `<p>✅ 导入完成！共导入 ${task.imported || 0} 条，跳过 ${task.skipped || 0} 条</p>`;
+      document.getElementById('startImport').disabled = false;
+    } else if (task.status === 'failed') {
+      if (progressEl) progressEl.innerHTML = `<p class="text-muted">❌ 导入失败: ${escapeHtml(task.error)}</p>`;
+      document.getElementById('startImport').disabled = false;
+    } else {
+      const processed = task.processed || 0;
+      const total = task.total_records || '?';
+      if (progressEl) progressEl.innerHTML = `<p>导入中... (${processed}/${total})</p>`;
+      setTimeout(poll, 2000);
     }
-  }
-}
+  };
 
-// ========== Init ==========
+  await poll();
+}
 
 init();
