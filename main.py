@@ -14,6 +14,7 @@ from .api import MessageRecorderAPI
 from .models import MessageRecord
 from .time_utils import parse_time_range, format_time_range, normalize_timestamp
 from .media_downloader import MediaDownloader, MEDIA_TYPE_MAP
+from .web_api import register_all_web_apis, cleanup_expired_tasks
 
 
 @register(
@@ -32,7 +33,7 @@ class MessageRecorder(Star):
         self._api: Optional[MessageRecorderAPI] = None
         self._media_downloader: Optional[MediaDownloader] = None
         self._cleanup_task: Optional[asyncio.Task] = None
-        self._web_panel_registered: bool = False
+        self._web_cleanup_task: Optional[asyncio.Task] = None
         self._pending_tasks: set = set()
         self._initialized: bool = False
         self._init_error: Optional[str] = None
@@ -57,7 +58,8 @@ class MessageRecorder(Star):
             self._api = MessageRecorderAPI(self._db, self._media_downloader)
 
             self._start_cleanup_task()
-            await self._register_web_panel()
+            self._register_web_apis()
+            self._web_cleanup_task = asyncio.create_task(cleanup_expired_tasks())
             self._initialized = True
             logger.info("[MessageRecorder] 插件初始化完成")
         except Exception as e:
@@ -90,21 +92,15 @@ class MessageRecorder(Star):
             except asyncio.CancelledError:
                 pass
 
+        if self._web_cleanup_task:
+            self._web_cleanup_task.cancel()
+            try:
+                await self._web_cleanup_task
+            except asyncio.CancelledError:
+                pass
+
         if self._media_downloader:
             await self._media_downloader.close()
-
-        if self._web_panel_registered:
-            try:
-                from data.plugins.astrbot_plugin_multi_web_manager import get_registry
-                registry = get_registry()
-                if registry:
-                    removed = registry.unregister_plugin("astrbot_plugin_message_recorder")
-                    if removed:
-                        logger.info(f"[MessageRecorder] 已移除 {removed} 个 Web 路由")
-            except ImportError:
-                pass
-            except Exception as e:
-                logger.warning(f"[MessageRecorder] 卸载 Web 面板时出错: {e}")
 
         if self._db:
             await self._db.close()
@@ -168,54 +164,13 @@ class MessageRecorder(Star):
         """获取 API 接口，供其他插件调用"""
         return self._api
 
-    async def _register_web_panel(self):
-        """注册 Web 面板到 MultiWebManager"""
-        # 检查 WebUI 开关
-        enable_web_ui = self.config.get("enable_web_ui", True)
-        if not enable_web_ui:
-            logger.info("[MessageRecorder] Web 面板已禁用（配置 enable_web_ui=False）")
-            return
-
-        # 尝试导入依赖插件（使用 AstrBot 插件路径）
+    def _register_web_apis(self):
+        """注册 Web API 到 AstrBot Dashboard"""
         try:
-            from data.plugins.astrbot_plugin_multi_web_manager import get_registry
-        except ImportError:
-            logger.warning(
-                "[MessageRecorder] 未找到 astrbot_plugin_multi_web_manager，"
-                "Web 面板功能不可用。请确保该插件已安装并启用。"
-            )
-            return
-
-        # 尝试注册 Web 面板
-        try:
-            from .web.blueprint import create_blueprint
-
-            registry = get_registry()
-            if registry is None:
-                logger.warning("[MessageRecorder] MultiWebManager 注册中心未初始化，Web 面板注册失败")
-                return
-
-            blueprint = create_blueprint(self)
-
-            registry.register_blueprint(
-                plugin_name="astrbot_plugin_message_recorder",
-                blueprint=blueprint,
-                url_prefix="/message_recorder",
-                description="消息记录器 Web 面板 - 支持消息查询、导出、导入和仪表盘统计"
-            )
-
-            # 设置插件元数据
-            registry.set_plugin_metadata("astrbot_plugin_message_recorder", {
-                "name": "消息记录器",
-                "version": "1.0.0",
-                "desc": "多平台消息记录器，提供 Web 面板进行查询、导出和统计",
-                "author": "cassia",
-            })
-
-            logger.info("[MessageRecorder] Web 面板已注册到 MultiWebManager，访问 /message_recorder/")
-            self._web_panel_registered = True
+            register_all_web_apis(self.context, self._db)
+            logger.info("[MessageRecorder] Web API 已注册到 AstrBot Dashboard")
         except Exception as e:
-            logger.error(f"[MessageRecorder] 注册 Web 面板失败: {e}")
+            logger.error(f"[MessageRecorder] 注册 Web API 失败: {e}")
 
     # ========== 消息监听 ==========
 

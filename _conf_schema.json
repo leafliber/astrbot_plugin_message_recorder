@@ -1,10 +1,4 @@
 {
-  "enable_web_ui": {
-    "type": "bool",
-    "description": "是否启用 Web 面板",
-    "default": true,
-    "hint": "启用后将注册 Web 面板到 MultiWebManager，需要安装 astrbot_plugin_multi_web_manager 插件"
-  },
   "enable_commands": {
     "type": "bool",
     "description": "是否启用消息记录指令",
