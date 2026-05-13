@@ -255,7 +255,7 @@ def register_all_web_apis(context, db: Database):
 
     async def api_stats():
         if not db:
-            return jsonify({"success": False, "error": "数据库未初始化"}), 500
+            return jsonify({"success": False, "error": "数据库未初始化"})
         try:
             stats = await db.get_stats()
             time_range = {}
@@ -278,11 +278,11 @@ def register_all_web_apis(context, db: Database):
             })
         except Exception as e:
             logger.error(f"[MessageRecorder Web] 获取统计失败: {e}")
-            return jsonify({"success": False, "error": str(e)}), 500
+            return jsonify({"success": False, "error": str(e)})
 
     async def api_stats_timeline():
         if not db:
-            return jsonify({"success": False, "error": "数据库未初始化"}), 500
+            return jsonify({"success": False, "error": "数据库未初始化"})
         try:
             interval = request.args.get("interval", "day")
             platform = request.args.get("platform")
@@ -301,11 +301,11 @@ def register_all_web_apis(context, db: Database):
             })
         except Exception as e:
             logger.error(f"[MessageRecorder Web] 获取时间趋势失败: {e}")
-            return jsonify({"success": False, "error": str(e)}), 500
+            return jsonify({"success": False, "error": str(e)})
 
     async def api_stats_senders():
         if not db:
-            return jsonify({"success": False, "error": "数据库未初始化"}), 500
+            return jsonify({"success": False, "error": "数据库未初始化"})
         try:
             limit = int(request.args.get("limit", 20))
             time_range = request.args.get("time")
@@ -321,11 +321,11 @@ def register_all_web_apis(context, db: Database):
             return jsonify({"success": True, "data": {"senders": senders, "total": len(senders)}})
         except Exception as e:
             logger.error(f"[MessageRecorder Web] 获取发送者排行失败: {e}")
-            return jsonify({"success": False, "error": str(e)}), 500
+            return jsonify({"success": False, "error": str(e)})
 
     async def api_stats_groups():
         if not db:
-            return jsonify({"success": False, "error": "数据库未初始化"}), 500
+            return jsonify({"success": False, "error": "数据库未初始化"})
         try:
             limit = int(request.args.get("limit", 20))
             time_range = request.args.get("time")
@@ -339,13 +339,13 @@ def register_all_web_apis(context, db: Database):
             return jsonify({"success": True, "data": {"groups": groups, "total": len(groups)}})
         except Exception as e:
             logger.error(f"[MessageRecorder Web] 获取群组统计失败: {e}")
-            return jsonify({"success": False, "error": str(e)}), 500
+            return jsonify({"success": False, "error": str(e)})
 
     # ========== Messages APIs ==========
 
     async def api_messages():
         if not db:
-            return jsonify({"success": False, "error": "数据库未初始化"}), 500
+            return jsonify({"success": False, "error": "数据库未初始化"})
         try:
             query_filter = _build_query_filter(request.args)
             messages = await db.query_messages(query_filter)
@@ -364,33 +364,33 @@ def register_all_web_apis(context, db: Database):
             })
         except Exception as e:
             logger.error(f"[MessageRecorder Web] 查询消息失败: {e}")
-            return jsonify({"success": False, "error": str(e)}), 500
+            return jsonify({"success": False, "error": str(e)})
 
     async def api_message_detail():
         if not db:
-            return jsonify({"success": False, "error": "数据库未初始化"}), 500
+            return jsonify({"success": False, "error": "数据库未初始化"})
         try:
             message_id_str = request.args.get("id") or request.args.get("message_id")
             if not message_id_str:
-                return jsonify({"success": False, "error": "缺少消息ID"}), 400
+                return jsonify({"success": False, "error": "缺少消息ID"})
             message_id = int(message_id_str)
             message = await db.get_message_by_id(message_id)
             if not message:
-                return jsonify({"success": False, "error": "消息不存在"}), 404
+                return jsonify({"success": False, "error": "消息不存在"})
             return jsonify({"success": True, "data": _format_message_detail(message)})
         except ValueError:
-            return jsonify({"success": False, "error": "消息ID格式无效"}), 400
+            return jsonify({"success": False, "error": "消息ID格式无效"})
         except Exception as e:
             logger.error(f"[MessageRecorder Web] 获取消息详情失败: {e}")
-            return jsonify({"success": False, "error": str(e)}), 500
+            return jsonify({"success": False, "error": str(e)})
 
     async def api_message_context():
         if not db:
-            return jsonify({"success": False, "error": "数据库未初始化"}), 500
+            return jsonify({"success": False, "error": "数据库未初始化"})
         try:
             message_id_str = request.args.get("id") or request.args.get("message_id")
             if not message_id_str:
-                return jsonify({"success": False, "error": "缺少消息ID"}), 400
+                return jsonify({"success": False, "error": "缺少消息ID"})
             message_id = int(message_id_str)
             before = int(request.args.get("before", 5))
             after = int(request.args.get("after", 5))
@@ -405,20 +405,20 @@ def register_all_web_apis(context, db: Database):
                 },
             })
         except ValueError:
-            return jsonify({"success": False, "error": "消息ID格式无效"}), 400
+            return jsonify({"success": False, "error": "消息ID格式无效"})
         except Exception as e:
             logger.error(f"[MessageRecorder Web] 获取消息上下文失败: {e}")
-            return jsonify({"success": False, "error": str(e)}), 500
+            return jsonify({"success": False, "error": str(e)})
 
     # ========== Search API ==========
 
     async def api_search():
         if not db:
-            return jsonify({"success": False, "error": "数据库未初始化"}), 500
+            return jsonify({"success": False, "error": "数据库未初始化"})
         try:
             keyword = request.args.get("keyword", "")
             if not keyword:
-                return jsonify({"success": False, "error": "缺少关键词"}), 400
+                return jsonify({"success": False, "error": "缺少关键词"})
             query_filter = _build_query_filter(request.args)
             query_filter.keyword = keyword
             messages = await db.query_messages(query_filter)
@@ -438,13 +438,13 @@ def register_all_web_apis(context, db: Database):
             })
         except Exception as e:
             logger.error(f"[MessageRecorder Web] 搜索失败: {e}")
-            return jsonify({"success": False, "error": str(e)}), 500
+            return jsonify({"success": False, "error": str(e)})
 
     # ========== Export APIs ==========
 
     async def api_export():
         if not db:
-            return jsonify({"success": False, "error": "数据库未初始化"}), 500
+            return jsonify({"success": False, "error": "数据库未初始化"})
         try:
             data = await request.get_json()
             format_type = data.get("format", "json")
@@ -476,15 +476,15 @@ def register_all_web_apis(context, db: Database):
             })
         except Exception as e:
             logger.error(f"[MessageRecorder Web] 创建导出任务失败: {e}")
-            return jsonify({"success": False, "error": str(e)}), 500
+            return jsonify({"success": False, "error": str(e)})
 
     async def api_export_status():
         task_id = request.args.get("task_id")
         if not task_id:
-            return jsonify({"success": False, "error": "缺少任务ID"}), 400
+            return jsonify({"success": False, "error": "缺少任务ID"})
         task = _export_tasks.get(task_id)
         if not task:
-            return jsonify({"success": False, "error": "任务不存在"}), 404
+            return jsonify({"success": False, "error": "任务不存在"})
         return jsonify({"success": True, "data": task})
 
     async def api_export_download():
@@ -519,11 +519,11 @@ def register_all_web_apis(context, db: Database):
 
     async def api_import_upload():
         if not db:
-            return jsonify({"success": False, "error": "数据库未初始化"}), 500
+            return jsonify({"success": False, "error": "数据库未初始化"})
         try:
             files = await request.files
             if "file" not in files:
-                return jsonify({"success": False, "error": "缺少文件"}), 400
+                return jsonify({"success": False, "error": "缺少文件"})
 
             mode = request.form.get("mode", "merge") if hasattr(request, 'form') else "merge"
 
@@ -540,7 +540,7 @@ def register_all_web_apis(context, db: Database):
             if actual_size > MAX_IMPORT_FILE_SIZE:
                 temp_file.unlink()
                 max_gb = MAX_IMPORT_FILE_SIZE // (1024 * 1024 * 1024)
-                return jsonify({"success": False, "error": f"文件大小超过限制（最大 {max_gb}GB）"}), 400
+                return jsonify({"success": False, "error": f"文件大小超过限制（最大 {max_gb}GB）"})
 
             _import_tasks[task_id] = {
                 "status": "pending",
@@ -572,7 +572,7 @@ def register_all_web_apis(context, db: Database):
             })
         except Exception as e:
             logger.error(f"[MessageRecorder Web] 简单导入失败: {e}")
-            return jsonify({"success": False, "error": str(e)}), 500
+            return jsonify({"success": False, "error": str(e)})
 
     async def api_import_init():
         try:
@@ -583,11 +583,11 @@ def register_all_web_apis(context, db: Database):
 
             if file_size > MAX_IMPORT_FILE_SIZE:
                 max_gb = MAX_IMPORT_FILE_SIZE // (1024 * 1024 * 1024)
-                return jsonify({"success": False, "error": f"文件大小超过限制（最大 {max_gb}GB）"}), 400
+                return jsonify({"success": False, "error": f"文件大小超过限制（最大 {max_gb}GB）"})
 
             file_ext = Path(filename).suffix.lower()
             if file_ext not in ALLOWED_IMPORT_EXTENSIONS:
-                return jsonify({"success": False, "error": "不支持的文件格式，仅支持 .json, .csv, .mrpkg"}), 400
+                return jsonify({"success": False, "error": "不支持的文件格式，仅支持 .json, .csv, .mrpkg"})
 
             total_chunks = (file_size + CHUNK_SIZE - 1) // CHUNK_SIZE if file_size > 0 else 1
             session_id = uuid.uuid4().hex
@@ -611,24 +611,21 @@ def register_all_web_apis(context, db: Database):
             })
         except Exception as e:
             logger.error(f"[MessageRecorder Web] 初始化分片上传失败: {e}")
-            return jsonify({"success": False, "error": str(e)}), 500
+            return jsonify({"success": False, "error": str(e)})
 
-    async def api_import_chunk():
+    async def api_import_chunk(session_id: str = "", chunk_index: int = 0):
         try:
-            session_id = request.args.get("session_id")
-            chunk_index_str = request.args.get("chunk_index")
-            if not session_id or chunk_index_str is None:
-                return jsonify({"success": False, "error": "缺少session_id或chunk_index"}), 400
-            chunk_index = int(chunk_index_str)
+            if not session_id:
+                return jsonify({"success": False, "error": "缺少session_id"})
             session = _chunk_sessions.get(session_id)
             if not session:
-                return jsonify({"success": False, "error": "上传会话不存在或已过期"}), 404
+                return jsonify({"success": False, "error": "上传会话不存在或已过期"})
             if chunk_index < 0 or chunk_index >= session["total_chunks"]:
-                return jsonify({"success": False, "error": "无效的分片索引"}), 400
+                return jsonify({"success": False, "error": "无效的分片索引"})
 
             files = await request.files
             if "file" not in files:
-                return jsonify({"success": False, "error": "缺少分片数据"}), 400
+                return jsonify({"success": False, "error": "缺少分片数据"})
 
             chunk_file = files["file"]
             chunk_path = Path(session["chunks_dir"]) / f"{chunk_index:06d}"
@@ -648,21 +645,21 @@ def register_all_web_apis(context, db: Database):
             })
         except Exception as e:
             logger.error(f"[MessageRecorder Web] 上传分片失败: {e}")
-            return jsonify({"success": False, "error": str(e)}), 500
+            return jsonify({"success": False, "error": str(e)})
 
     async def api_import_complete():
         if not db:
-            return jsonify({"success": False, "error": "数据库未初始化"}), 500
+            return jsonify({"success": False, "error": "数据库未初始化"})
         try:
             data = await request.get_json()
             session_id = data.get("session_id", "")
             session = _chunk_sessions.get(session_id)
             if not session:
-                return jsonify({"success": False, "error": "上传会话不存在或已过期"}), 404
+                return jsonify({"success": False, "error": "上传会话不存在或已过期"})
 
             if len(session["uploaded_chunks"]) < session["total_chunks"]:
                 missing = set(range(session["total_chunks"])) - set(session["uploaded_chunks"])
-                return jsonify({"success": False, "error": f"尚有 {len(missing)} 个分片未上传"}), 400
+                return jsonify({"success": False, "error": f"尚有 {len(missing)} 个分片未上传"})
 
             task_id = f"import_{uuid.uuid4().hex[:12]}"
             temp_dir = _get_plugin_data_dir() / "temp"
@@ -683,7 +680,7 @@ def register_all_web_apis(context, db: Database):
             if actual_size > MAX_IMPORT_FILE_SIZE:
                 assembled_file.unlink()
                 max_gb = MAX_IMPORT_FILE_SIZE // (1024 * 1024 * 1024)
-                return jsonify({"success": False, "error": f"文件大小超过限制（最大 {max_gb}GB）"}), 400
+                return jsonify({"success": False, "error": f"文件大小超过限制（最大 {max_gb}GB）"})
 
             _import_tasks[task_id] = {
                 "status": "pending",
@@ -715,32 +712,32 @@ def register_all_web_apis(context, db: Database):
             })
         except Exception as e:
             logger.error(f"[MessageRecorder Web] 完成分片上传失败: {e}")
-            return jsonify({"success": False, "error": str(e)}), 500
+            return jsonify({"success": False, "error": str(e)})
 
     async def api_import_status():
         task_id = request.args.get("task_id")
         if not task_id:
-            return jsonify({"success": False, "error": "缺少任务ID"}), 400
+            return jsonify({"success": False, "error": "缺少任务ID"})
         task = _import_tasks.get(task_id)
         if not task:
-            return jsonify({"success": False, "error": "任务不存在"}), 404
+            return jsonify({"success": False, "error": "任务不存在"})
         return jsonify({"success": True, "data": task})
 
     # ========== Metadata APIs ==========
 
     async def api_platforms():
         if not db:
-            return jsonify({"success": False, "error": "数据库未初始化"}), 500
+            return jsonify({"success": False, "error": "数据库未初始化"})
         try:
             platforms = await db.get_distinct_platforms()
             return jsonify({"success": True, "data": {"platforms": platforms}})
         except Exception as e:
             logger.error(f"[MessageRecorder Web] 获取平台列表失败: {e}")
-            return jsonify({"success": False, "error": str(e)}), 500
+            return jsonify({"success": False, "error": str(e)})
 
     async def api_senders():
         if not db:
-            return jsonify({"success": False, "error": "数据库未初始化"}), 500
+            return jsonify({"success": False, "error": "数据库未初始化"})
         try:
             platform = request.args.get("platform")
             group_id = request.args.get("group_id")
@@ -749,11 +746,11 @@ def register_all_web_apis(context, db: Database):
             return jsonify({"success": True, "data": {"senders": senders}})
         except Exception as e:
             logger.error(f"[MessageRecorder Web] 获取发送者列表失败: {e}")
-            return jsonify({"success": False, "error": str(e)}), 500
+            return jsonify({"success": False, "error": str(e)})
 
     async def api_groups():
         if not db:
-            return jsonify({"success": False, "error": "数据库未初始化"}), 500
+            return jsonify({"success": False, "error": "数据库未初始化"})
         try:
             platform = request.args.get("platform")
             limit = int(request.args.get("limit", 50))
@@ -761,7 +758,7 @@ def register_all_web_apis(context, db: Database):
             return jsonify({"success": True, "data": {"groups": groups}})
         except Exception as e:
             logger.error(f"[MessageRecorder Web] 获取群组列表失败: {e}")
-            return jsonify({"success": False, "error": str(e)}), 500
+            return jsonify({"success": False, "error": str(e)})
 
     async def api_media():
         rel_path = request.args.get("path")
@@ -796,7 +793,7 @@ def register_all_web_apis(context, db: Database):
     context.register_web_api(f"{prefix}/export/download", api_export_download, ["GET"], "下载导出文件")
     context.register_web_api(f"{prefix}/import/upload", api_import_upload, ["POST"], "简单文件导入")
     context.register_web_api(f"{prefix}/import/init", api_import_init, ["POST"], "初始化分片导入")
-    context.register_web_api(f"{prefix}/import/chunk", api_import_chunk, ["POST"], "上传分片")
+    context.register_web_api(f"{prefix}/import/chunk/<session_id>/<int:chunk_index>", api_import_chunk, ["POST"], "上传分片")
     context.register_web_api(f"{prefix}/import/complete", api_import_complete, ["POST"], "完成分片导入")
     context.register_web_api(f"{prefix}/import/status", api_import_status, ["GET"], "查询导入状态")
     context.register_web_api(f"{prefix}/platforms", api_platforms, ["GET"], "获取平台列表")

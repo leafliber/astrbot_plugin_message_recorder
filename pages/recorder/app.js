@@ -1,7 +1,5 @@
 const bridge = window.AstrBotPluginPage;
 
-const PLUGIN_NAME = 'astrbot_plugin_message_recorder';
-
 let bridgeReady = false;
 let pluginContext = null;
 
@@ -17,34 +15,38 @@ function logError(...args) {
 
 async function apiGet(endpoint, params) {
   if (!bridge || !bridgeReady) {
-    logError('Bridge not ready for apiGet:', endpoint);
-    return { success: false, error: 'Bridge SDK 未就绪' };
+    throw new Error('Bridge SDK 未就绪');
   }
-  try {
-    log('apiGet:', endpoint, params);
-    const result = await bridge.apiGet(endpoint, params);
-    log('apiGet response:', endpoint, result);
-    return result;
-  } catch (e) {
-    logError('apiGet failed:', endpoint, e);
-    return { success: false, error: e.message || String(e) };
-  }
+  log('apiGet:', endpoint, params);
+  const result = await bridge.apiGet(endpoint, params);
+  log('apiGet response:', endpoint, result);
+  return result;
 }
 
 async function apiPost(endpoint, body) {
   if (!bridge || !bridgeReady) {
-    logError('Bridge not ready for apiPost:', endpoint);
-    return { success: false, error: 'Bridge SDK 未就绪' };
+    throw new Error('Bridge SDK 未就绪');
   }
-  try {
-    log('apiPost:', endpoint, body);
-    const result = await bridge.apiPost(endpoint, body);
-    log('apiPost response:', endpoint, result);
-    return result;
-  } catch (e) {
-    logError('apiPost failed:', endpoint, e);
-    return { success: false, error: e.message || String(e) };
+  log('apiPost:', endpoint, body);
+  const result = await bridge.apiPost(endpoint, body);
+  log('apiPost response:', endpoint, result);
+  return result;
+}
+
+function extractData(response) {
+  if (response && typeof response === 'object') {
+    if ('success' in response) {
+      if (response.success) {
+        return response.data;
+      } else {
+        throw new Error(response.error || '请求失败');
+      }
+    }
+    if ('code' in response && (response.code === 500 || response.code >= 400)) {
+      throw new Error(response.message || '请求失败');
+    }
   }
+  return response;
 }
 
 function showInitError(message) {
@@ -272,32 +274,41 @@ function initDashboard() {
 async function loadDashboardData() {
   showLoading();
   try {
-    const statsResult = await apiGet('stats');
-    if (statsResult.success) {
-      updateStatsCards(statsResult.data);
-      updatePlatformChart(statsResult.data.platform_stats);
-    } else {
-      logError('Failed to load stats:', statsResult.error);
-    }
-    const timelineResult = await apiGet('stats/timeline', { interval: 'day' });
-    if (timelineResult.success) {
-      updateTimelineChart(timelineResult.data.points);
-    } else {
-      logError('Failed to load timeline:', timelineResult.error);
-    }
+    const statsRaw = await apiGet('stats');
+    const stats = extractData(statsRaw);
+    updateStatsCards(stats);
+    updatePlatformChart(stats.platform_stats);
+
+    const timelineRaw = await apiGet('stats/timeline', { interval: 'day' });
+    const timelineData = extractData(timelineRaw);
+    updateTimelineChart(timelineData.points);
+
     updateTimeRangeDisplay(currentTimeRange);
     await loadRankingData();
+  } catch (e) {
+    logError('Failed to load dashboard data:', e);
+    showMessageError(`加载数据失败: ${e.message || e}`);
   } finally {
     hideLoading();
   }
 }
 
 async function loadRankingData() {
-  const senderResult = await apiGet('stats/senders', { limit: 10, time: currentTimeRange });
-  if (senderResult.success) updateSenderChart(senderResult.data.senders);
+  try {
+    const senderRaw = await apiGet('stats/senders', { limit: 10, time: currentTimeRange });
+    const senderData = extractData(senderRaw);
+    updateSenderChart(senderData.senders);
+  } catch (e) {
+    logError('Failed to load sender ranking:', e);
+  }
 
-  const groupResult = await apiGet('stats/groups', { limit: 10, time: currentTimeRange });
-  if (groupResult.success) updateGroupChart(groupResult.data.groups);
+  try {
+    const groupRaw = await apiGet('stats/groups', { limit: 10, time: currentTimeRange });
+    const groupData = extractData(groupRaw);
+    updateGroupChart(groupData.groups);
+  } catch (e) {
+    logError('Failed to load group ranking:', e);
+  }
 }
 
 function updateStatsCards(stats) {
@@ -469,51 +480,62 @@ async function loadSearchData() {
 }
 
 async function loadPlatforms() {
-  const result = await apiGet('platforms');
-  if (!result.success) return;
-
-  const selects = ['platformFilter', 'exportPlatform'];
-  selects.forEach(id => {
-    const el = document.getElementById(id);
-    if (!el) return;
-    const currentVal = el.value;
-    el.innerHTML = '<option value="">全部平台</option>';
-    result.data.platforms.forEach(p => {
-      const opt = document.createElement('option');
-      opt.value = p;
-      opt.textContent = getPlatformIcon(p);
-      el.appendChild(opt);
+  try {
+    const raw = await apiGet('platforms');
+    const data = extractData(raw);
+    const selects = ['platformFilter', 'exportPlatform'];
+    selects.forEach(id => {
+      const el = document.getElementById(id);
+      if (!el) return;
+      const currentVal = el.value;
+      el.innerHTML = '<option value="">全部平台</option>';
+      data.platforms.forEach(p => {
+        const opt = document.createElement('option');
+        opt.value = p;
+        opt.textContent = getPlatformIcon(p);
+        el.appendChild(opt);
+      });
+      el.value = currentVal;
     });
-    el.value = currentVal;
-  });
+  } catch (e) {
+    logError('Failed to load platforms:', e);
+  }
 }
 
 async function loadGroups(platform) {
-  const result = await apiGet('groups', { platform, limit: 100 });
-  if (!result.success) return;
-  const el = document.getElementById('groupFilter');
-  if (!el) return;
-  el.innerHTML = '<option value="">全部群组</option>';
-  result.data.groups.forEach(g => {
-    const opt = document.createElement('option');
-    opt.value = g.id;
-    opt.textContent = truncate(g.id, 30);
-    el.appendChild(opt);
-  });
+  try {
+    const raw = await apiGet('groups', { platform, limit: 100 });
+    const data = extractData(raw);
+    const el = document.getElementById('groupFilter');
+    if (!el) return;
+    el.innerHTML = '<option value="">全部群组</option>';
+    data.groups.forEach(g => {
+      const opt = document.createElement('option');
+      opt.value = g.id;
+      opt.textContent = truncate(g.id, 30);
+      el.appendChild(opt);
+    });
+  } catch (e) {
+    logError('Failed to load groups:', e);
+  }
 }
 
 async function loadSenders(platform) {
-  const result = await apiGet('senders', { platform, limit: 100 });
-  if (!result.success) return;
-  const el = document.getElementById('senderFilter');
-  if (!el) return;
-  el.innerHTML = '<option value="">全部发送者</option>';
-  result.data.senders.forEach(s => {
-    const opt = document.createElement('option');
-    opt.value = s.id;
-    opt.textContent = truncate(s.name, 30);
-    el.appendChild(opt);
-  });
+  try {
+    const raw = await apiGet('senders', { platform, limit: 100 });
+    const data = extractData(raw);
+    const el = document.getElementById('senderFilter');
+    if (!el) return;
+    el.innerHTML = '<option value="">全部发送者</option>';
+    data.senders.forEach(s => {
+      const opt = document.createElement('option');
+      opt.value = s.id;
+      opt.textContent = truncate(s.name, 30);
+      el.appendChild(opt);
+    });
+  } catch (e) {
+    logError('Failed to load senders:', e);
+  }
 }
 
 async function loadMessages() {
@@ -533,14 +555,14 @@ async function loadMessages() {
     if (endEl?.value) searchFilters.end_time = new Date(endEl.value).getTime();
     else delete searchFilters.end_time;
 
-    const result = await apiGet('messages', searchFilters);
-    if (!result.success) {
-      showMessageError(result.error);
-      return;
-    }
-    totalMessages = result.data.pagination.total;
-    renderMessages(result.data.messages);
-    renderPagination(result.data.pagination);
+    const raw = await apiGet('messages', searchFilters);
+    const data = extractData(raw);
+    totalMessages = data.pagination.total;
+    renderMessages(data.messages);
+    renderPagination(data.pagination);
+  } catch (e) {
+    logError('Failed to load messages:', e);
+    showMessageError(e.message || String(e));
   } finally {
     hideLoading();
   }
@@ -631,58 +653,66 @@ function hideModal() {
 
 async function showMessageDetail(messageId) {
   showLoading();
-  const result = await apiGet('message/detail', { id: messageId });
-  hideLoading();
-  if (!result.success) { showModal(`<p class="text-muted">加载失败: ${escapeHtml(result.error)}</p>`); return; }
-
-  const msg = result.data;
-  showModal(`
-    <div class="detail-section">
-      <div class="detail-row"><span class="detail-label">时间:</span><span class="detail-value">${formatTime(msg.timestamp)}</span></div>
-      <div class="detail-row"><span class="detail-label">平台:</span><span class="detail-value">${getPlatformIcon(msg.platform)}</span></div>
-      <div class="detail-row"><span class="detail-label">发送者:</span><span class="detail-value">${escapeHtml(msg.sender_name || msg.sender_id)}</span></div>
-      <div class="detail-row"><span class="detail-label">消息类型:</span><span class="detail-value">${msg.message_type === 'group' ? '群聊' : '私聊'}</span></div>
-      ${msg.group_id ? `<div class="detail-row"><span class="detail-label">群组:</span><span class="detail-value">${escapeHtml(msg.group_id)}</span></div>` : ''}
-      <div class="detail-row"><span class="detail-label">内容:</span><span class="detail-value">${escapeHtml(msg.message_str) || '[非文本消息]'}</span></div>
-    </div>
-    ${msg.message_chain?.length ? `
-    <div class="detail-section mt-2">
-      <h4>消息链</h4>
-      ${msg.message_chain.map(c => `<div class="chain-item"><span class="chain-type">${c.type}</span>${c.text ? escapeHtml(c.text) : ''}${c.url ? `<a href="${escapeHtml(c.url)}" target="_blank">[链接]</a>` : ''}${c.local_path ? `<span class="chain-media">[本地文件: ${escapeHtml(c.local_path)}]</span>` : ''}</div>`).join('')}
-    </div>` : ''}
-    ${msg.raw_message ? `
-    <div class="detail-section mt-2">
-      <h4>原始消息</h4>
-      <pre class="raw-message">${escapeHtml(typeof msg.raw_message === 'string' ? msg.raw_message : JSON.stringify(msg.raw_message, null, 2))}</pre>
-    </div>` : ''}
-    <div class="detail-actions mt-2">
-      <button class="btn" onclick="showMessageContext(${messageId})">查看上下文</button>
-    </div>
-  `);
+  try {
+    const raw = await apiGet('message/detail', { id: messageId });
+    const msg = extractData(raw);
+    hideLoading();
+    showModal(`
+      <div class="detail-section">
+        <div class="detail-row"><span class="detail-label">时间:</span><span class="detail-value">${formatTime(msg.timestamp)}</span></div>
+        <div class="detail-row"><span class="detail-label">平台:</span><span class="detail-value">${getPlatformIcon(msg.platform)}</span></div>
+        <div class="detail-row"><span class="detail-label">发送者:</span><span class="detail-value">${escapeHtml(msg.sender_name || msg.sender_id)}</span></div>
+        <div class="detail-row"><span class="detail-label">消息类型:</span><span class="detail-value">${msg.message_type === 'group' ? '群聊' : '私聊'}</span></div>
+        ${msg.group_id ? `<div class="detail-row"><span class="detail-label">群组:</span><span class="detail-value">${escapeHtml(msg.group_id)}</span></div>` : ''}
+        <div class="detail-row"><span class="detail-label">内容:</span><span class="detail-value">${escapeHtml(msg.message_str) || '[非文本消息]'}</span></div>
+      </div>
+      ${msg.message_chain?.length ? `
+      <div class="detail-section mt-2">
+        <h4>消息链</h4>
+        ${msg.message_chain.map(c => `<div class="chain-item"><span class="chain-type">${c.type}</span>${c.text ? escapeHtml(c.text) : ''}${c.url ? `<a href="${escapeHtml(c.url)}" target="_blank">[链接]</a>` : ''}${c.local_path ? `<span class="chain-media">[本地文件: ${escapeHtml(c.local_path)}]</span>` : ''}</div>`).join('')}
+      </div>` : ''}
+      ${msg.raw_message ? `
+      <div class="detail-section mt-2">
+        <h4>原始消息</h4>
+        <pre class="raw-message">${escapeHtml(typeof msg.raw_message === 'string' ? msg.raw_message : JSON.stringify(msg.raw_message, null, 2))}</pre>
+      </div>` : ''}
+      <div class="detail-actions mt-2">
+        <button class="btn" onclick="showMessageContext(${messageId})">查看上下文</button>
+      </div>
+    `);
+  } catch (e) {
+    hideLoading();
+    logError('Failed to load message detail:', e);
+    showModal(`<p class="text-muted">加载失败: ${escapeHtml(e.message || e)}</p>`);
+  }
 }
 
 async function showMessageContext(messageId) {
   showLoading();
-  const result = await apiGet('message/context', { id: messageId, before: 5, after: 5 });
-  hideLoading();
-  if (!result.success) { showModal(`<p class="text-muted">加载失败: ${escapeHtml(result.error)}</p>`); return; }
-
-  const data = result.data;
-  const allMsgs = [...(data.before || []), data.target, ...(data.after || [])].filter(Boolean);
-  showModal(`
-    <div class="detail-section">
-      <h4>消息上下文</h4>
-      <div class="context-messages">
-        ${allMsgs.map(m => `
-          <div class="context-msg ${m.id === messageId ? 'context-target' : ''}">
-            <span class="context-time">${formatShortTime(m.timestamp)}</span>
-            <span class="context-sender">${escapeHtml(m.sender_name || m.sender_id)}</span>
-            <span class="context-content">${escapeHtml(truncate(m.message_str, 100)) || '[非文本]'}</span>
-          </div>
-        `).join('')}
+  try {
+    const raw = await apiGet('message/context', { id: messageId, before: 5, after: 5 });
+    const data = extractData(raw);
+    hideLoading();
+    const allMsgs = [...(data.before || []), data.target, ...(data.after || [])].filter(Boolean);
+    showModal(`
+      <div class="detail-section">
+        <h4>消息上下文</h4>
+        <div class="context-messages">
+          ${allMsgs.map(m => `
+            <div class="context-msg ${m.id === messageId ? 'context-target' : ''}">
+              <span class="context-time">${formatShortTime(m.timestamp)}</span>
+              <span class="context-sender">${escapeHtml(m.sender_name || m.sender_id)}</span>
+              <span class="context-content">${escapeHtml(truncate(m.message_str, 100)) || '[非文本]'}</span>
+            </div>
+          `).join('')}
+        </div>
       </div>
-    </div>
-  `);
+    `);
+  } catch (e) {
+    hideLoading();
+    logError('Failed to load message context:', e);
+    showModal(`<p class="text-muted">加载失败: ${escapeHtml(e.message || e)}</p>`);
+  }
 }
 
 // ========== Export ==========
@@ -740,15 +770,15 @@ async function startExport() {
     include_media: document.getElementById('includeMedia')?.checked ?? false,
   };
 
-  const result = await apiPost('export', { format: selectedExportFormat, filters, options });
-  if (!result.success) {
-    alert('导出失败: ' + result.error);
-    return;
+  try {
+    const raw = await apiPost('export', { format: selectedExportFormat, filters, options });
+    const task = extractData(raw);
+    document.getElementById('startExport').disabled = true;
+    pollExportStatus(task.task_id);
+  } catch (e) {
+    logError('Export failed:', e);
+    alert('导出失败: ' + (e.message || e));
   }
-
-  const task = result.data;
-  document.getElementById('startExport').disabled = true;
-  pollExportStatus(task.task_id);
 }
 
 async function pollExportStatus(taskId) {
@@ -759,27 +789,28 @@ async function pollExportStatus(taskId) {
   }
 
   const poll = async () => {
-    const result = await apiGet('export/status', { task_id: taskId });
-    if (!result.success) {
-      if (progressEl) progressEl.innerHTML = `<p class="text-muted">查询状态失败: ${escapeHtml(result.error)}</p>`;
-      document.getElementById('startExport').disabled = false;
-      return;
-    }
+    try {
+      const raw = await apiGet('export/status', { task_id: taskId });
+      const task = extractData(raw);
 
-    const task = result.data;
-    if (task.status === 'completed') {
-      if (progressEl) progressEl.innerHTML = `<p>✅ 导出完成！共 ${task.actual_count || 0} 条记录</p><a href="#" id="downloadLink" class="btn btn-success">下载文件</a>`;
-      document.getElementById('downloadLink')?.addEventListener('click', (e) => {
-        e.preventDefault();
-        downloadExportFile(taskId);
-      });
+      if (task.status === 'completed') {
+        if (progressEl) progressEl.innerHTML = `<p>✅ 导出完成！共 ${task.actual_count || 0} 条记录</p><a href="#" id="downloadLink" class="btn btn-success">下载文件</a>`;
+        document.getElementById('downloadLink')?.addEventListener('click', (e) => {
+          e.preventDefault();
+          downloadExportFile(taskId);
+        });
+        document.getElementById('startExport').disabled = false;
+      } else if (task.status === 'failed') {
+        if (progressEl) progressEl.innerHTML = `<p class="text-muted">❌ 导出失败: ${escapeHtml(task.error)}</p>`;
+        document.getElementById('startExport').disabled = false;
+      } else {
+        if (progressEl) progressEl.innerHTML = `<p>导出中... (状态: ${task.status})</p>`;
+        setTimeout(poll, 2000);
+      }
+    } catch (e) {
+      logError('Poll export status failed:', e);
+      if (progressEl) progressEl.innerHTML = `<p class="text-muted">查询状态失败: ${escapeHtml(e.message || e)}</p>`;
       document.getElementById('startExport').disabled = false;
-    } else if (task.status === 'failed') {
-      if (progressEl) progressEl.innerHTML = `<p class="text-muted">❌ 导出失败: ${escapeHtml(task.error)}</p>`;
-      document.getElementById('startExport').disabled = false;
-    } else {
-      if (progressEl) progressEl.innerHTML = `<p>导出中... (状态: ${task.status})</p>`;
-      setTimeout(poll, 2000);
     }
   };
 
@@ -873,7 +904,8 @@ async function simpleImport(file, mode, progressEl) {
 
   if (progressEl) progressEl.innerHTML = '<p>文件上传完成，处理中...</p>';
 
-  const taskId = result.data?.task_id || result.task_id;
+  const data = extractData(result);
+  const taskId = data?.task_id;
   if (taskId) {
     pollImportStatus(taskId, progressEl);
   } else {
@@ -887,14 +919,14 @@ async function chunkedImport(file, mode, progressEl) {
     throw new Error('Bridge SDK 未就绪');
   }
 
-  const initResult = await apiPost('import/init', {
+  const initRaw = await apiPost('import/init', {
     filename: file.name,
     file_size: file.size,
     mode: mode,
   });
-  if (!initResult.success) throw new Error(initResult.error);
+  const initData = extractData(initRaw);
+  const { session_id, total_chunks, chunk_size } = initData;
 
-  const { session_id, total_chunks, chunk_size } = initResult.data;
   if (progressEl) progressEl.innerHTML = `<p>分片上传中 (0/${total_chunks})...</p>`;
 
   for (let i = 0; i < total_chunks; i++) {
@@ -902,16 +934,15 @@ async function chunkedImport(file, mode, progressEl) {
     const end = Math.min(start + chunk_size, file.size);
     const chunk = file.slice(start, end);
 
-    const chunkResult = await bridge.upload(`import/chunk?session_id=${session_id}&chunk_index=${i}`, chunk);
-    log(`chunk ${i} result:`, chunkResult);
+    await bridge.upload(`import/chunk/${session_id}/${i}`, chunk);
+    log(`chunk ${i} uploaded`);
 
     if (progressEl) progressEl.innerHTML = `<p>分片上传中 (${i + 1}/${total_chunks})...</p>`;
   }
 
-  const completeResult = await apiPost('import/complete', { session_id });
-  if (!completeResult.success) throw new Error(completeResult.error);
-
-  const taskId = completeResult.data?.task_id;
+  const completeRaw = await apiPost('import/complete', { session_id });
+  const completeData = extractData(completeRaw);
+  const taskId = completeData?.task_id;
   if (taskId) {
     pollImportStatus(taskId, progressEl);
   } else {
@@ -922,25 +953,26 @@ async function chunkedImport(file, mode, progressEl) {
 
 async function pollImportStatus(taskId, progressEl) {
   const poll = async () => {
-    const result = await apiGet('import/status', { task_id: taskId });
-    if (!result.success) {
-      if (progressEl) progressEl.innerHTML = `<p class="text-muted">查询状态失败: ${escapeHtml(result.error)}</p>`;
-      document.getElementById('startImport').disabled = false;
-      return;
-    }
+    try {
+      const raw = await apiGet('import/status', { task_id: taskId });
+      const task = extractData(raw);
 
-    const task = result.data;
-    if (task.status === 'completed') {
-      if (progressEl) progressEl.innerHTML = `<p>✅ 导入完成！共导入 ${task.imported || 0} 条，跳过 ${task.skipped || 0} 条</p>`;
+      if (task.status === 'completed') {
+        if (progressEl) progressEl.innerHTML = `<p>✅ 导入完成！共导入 ${task.imported || 0} 条，跳过 ${task.skipped || 0} 条</p>`;
+        document.getElementById('startImport').disabled = false;
+      } else if (task.status === 'failed') {
+        if (progressEl) progressEl.innerHTML = `<p class="text-muted">❌ 导入失败: ${escapeHtml(task.error)}</p>`;
+        document.getElementById('startImport').disabled = false;
+      } else {
+        const processed = task.processed || 0;
+        const total = task.total_records || '?';
+        if (progressEl) progressEl.innerHTML = `<p>导入中... (${processed}/${total})</p>`;
+        setTimeout(poll, 2000);
+      }
+    } catch (e) {
+      logError('Poll import status failed:', e);
+      if (progressEl) progressEl.innerHTML = `<p class="text-muted">查询状态失败: ${escapeHtml(e.message || e)}</p>`;
       document.getElementById('startImport').disabled = false;
-    } else if (task.status === 'failed') {
-      if (progressEl) progressEl.innerHTML = `<p class="text-muted">❌ 导入失败: ${escapeHtml(task.error)}</p>`;
-      document.getElementById('startImport').disabled = false;
-    } else {
-      const processed = task.processed || 0;
-      const total = task.total_records || '?';
-      if (progressEl) progressEl.innerHTML = `<p>导入中... (${processed}/${total})</p>`;
-      setTimeout(poll, 2000);
     }
   };
 
