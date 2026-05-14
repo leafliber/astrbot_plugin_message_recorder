@@ -618,27 +618,67 @@ class Database:
         if not target:
             return {"before": [], "after": []}
 
-        # 获取之前的消息
-        before_filter = QueryFilter(
-            session_id=target.session_id,
-            end_time=target.timestamp,
-            limit=before,
-            order="desc",
-        )
-        before_msgs = await self.query_messages(before_filter)
-        # 排除目标消息本身，并按时间顺序排列
-        before_msgs = [m for m in before_msgs if m.id != message_id]
-        before_msgs.reverse()
+        if target.message_type == "group" and target.group_id:
+            scope_conditions = "platform = ? AND group_id = ? AND message_type = 'group'"
+            scope_params = [target.platform, target.group_id]
+        elif target.session_id and target.session_id.strip():
+            scope_conditions = "session_id = ?"
+            scope_params = [target.session_id]
+        else:
+            scope_conditions = "platform = ? AND sender_id = ? AND message_type = 'private'"
+            scope_params = [target.platform, target.sender_id]
 
-        # 获取之后的消息
-        after_filter = QueryFilter(
-            session_id=target.session_id,
-            start_time=target.timestamp,
-            limit=after + 1,
-            order="asc",
-        )
-        after_msgs = await self.query_messages(after_filter)
-        after_msgs = [m for m in after_msgs if m.id != message_id]
+        select_columns = """
+            id, platform, message_id, session_id, group_id,
+            sender_id, sender_name, message_type,
+            message_str, message_chain, raw_message,
+            timestamp, created_at
+        """
+
+        before_sql = f"""
+            SELECT {select_columns}
+            FROM messages
+            WHERE {scope_conditions} AND timestamp < ?
+            ORDER BY timestamp DESC
+            LIMIT ?
+        """
+        before_params = scope_params + [target.timestamp, before]
+
+        after_sql = f"""
+            SELECT {select_columns}
+            FROM messages
+            WHERE {scope_conditions} AND timestamp > ?
+            ORDER BY timestamp ASC
+            LIMIT ?
+        """
+        after_params = scope_params + [target.timestamp, after]
+
+        async with self._lock:
+            cursor = await self._db.execute(before_sql, before_params)
+            before_rows = await cursor.fetchall()
+
+            cursor = await self._db.execute(after_sql, after_params)
+            after_rows = await cursor.fetchall()
+
+        def _row_to_record(row) -> MessageRecord:
+            return MessageRecord(
+                id=row[0],
+                platform=row[1],
+                message_id=row[2],
+                session_id=row[3],
+                group_id=row[4],
+                sender_id=row[5],
+                sender_name=row[6],
+                message_type=row[7],
+                message_str=row[8],
+                message_chain=row[9],
+                raw_message=row[10],
+                timestamp=row[11],
+                created_at=row[12],
+            )
+
+        before_msgs = [_row_to_record(row) for row in reversed(before_rows)]
+        after_msgs = [_row_to_record(row) for row in after_rows]
 
         return {"before": before_msgs, "after": after_msgs}
 
