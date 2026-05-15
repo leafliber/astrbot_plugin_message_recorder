@@ -14,14 +14,23 @@ from .api import MessageRecorderAPI
 from .models import MessageRecord
 from .time_utils import parse_time_range, format_time_range, normalize_timestamp
 from .media_downloader import MediaDownloader, MEDIA_TYPE_MAP
+from .serializer import (
+    serialize_message_chain,
+    extract_reply_info,
+    extract_media_url as serializer_extract_media_url,
+)
+from .platform_adapter import get_adapter
 from .web_api import register_all_web_apis, cleanup_expired_tasks
+
+MAX_CONCURRENT_SAVES = 8
+MAX_CONCURRENT_DOWNLOADS = 4
 
 
 @register(
     name="astrbot_plugin_message_recorder",
     desc="多平台消息记录器，将消息保存到 SQLite 数据库",
     author="Leafiber",
-    version="1.0.0",
+    version="2.0.0",
 )
 class MessageRecorder(Star):
     """消息记录器插件主类"""
@@ -35,6 +44,8 @@ class MessageRecorder(Star):
         self._cleanup_task: Optional[asyncio.Task] = None
         self._web_cleanup_task: Optional[asyncio.Task] = None
         self._pending_tasks: set = set()
+        self._save_semaphore = asyncio.Semaphore(MAX_CONCURRENT_SAVES)
+        self._download_semaphore = asyncio.Semaphore(MAX_CONCURRENT_DOWNLOADS)
         self._initialized: bool = False
         self._init_error: Optional[str] = None
 
@@ -71,7 +82,6 @@ class MessageRecorder(Star):
             logger.error(f"[MessageRecorder] 初始化失败: {e}")
 
     def _check_initialized(self) -> bool:
-        """检查插件是否已成功初始化"""
         if not self._initialized:
             logger.warning(f"[MessageRecorder] 插件未初始化或初始化失败: {self._init_error}")
             return False
@@ -107,14 +117,12 @@ class MessageRecorder(Star):
         logger.info("[MessageRecorder] 插件已终止")
 
     def _start_cleanup_task(self):
-        """启动定时清理任务"""
         interval_hours = self.config.get("cleanup_interval_hours", 24)
         self._cleanup_task = asyncio.create_task(
             self._cleanup_loop(interval_hours)
         )
 
     async def _cleanup_loop(self, interval_hours: int):
-        """定时清理循环"""
         interval_seconds = interval_hours * 3600
         while True:
             try:
@@ -126,7 +134,6 @@ class MessageRecorder(Star):
                 logger.error(f"[MessageRecorder] 清理任务出错: {e}")
 
     async def _do_cleanup(self) -> dict:
-        """执行清理操作"""
         result = {"by_age": 0, "by_limit": 0, "media_files": 0}
         if not self._db:
             return result
@@ -161,11 +168,9 @@ class MessageRecorder(Star):
         return result
 
     def get_api(self) -> Optional[MessageRecorderAPI]:
-        """获取 API 接口，供其他插件调用"""
         return self._api
 
     def _register_web_apis(self):
-        """注册 Web API 到 AstrBot Dashboard"""
         try:
             register_all_web_apis(self.context, self._db)
             logger.info("[MessageRecorder] Web API 已注册到 AstrBot Dashboard")
@@ -176,10 +181,6 @@ class MessageRecorder(Star):
 
     @filter.event_message_type(filter.EventMessageType.ALL)
     async def on_message(self, event: AstrMessageEvent):
-        """
-        监听所有消息事件并保存到数据库
-        注意：此监听器不应拦截消息，让事件继续传递
-        """
         if not self._check_initialized():
             return
 
@@ -188,23 +189,40 @@ class MessageRecorder(Star):
         task.add_done_callback(self._pending_tasks.discard)
 
     async def _save_message_async(self, event: AstrMessageEvent):
-        """异步保存消息，不阻塞事件处理"""
+        async with self._save_semaphore:
+            await self._do_save_message(event)
+
+    async def _do_save_message(self, event: AstrMessageEvent):
         logger.debug("[MessageRecorder] 收到消息事件，开始处理")
 
         try:
             message_obj = event.message_obj
             platform = self._get_platform_name(event)
+            adapter = get_adapter(platform)
 
             normalized_timestamp = normalize_timestamp(message_obj.timestamp)
 
+            sender_id = adapter.normalize_sender_id(
+                message_obj.sender.user_id if message_obj.sender else ""
+            )
+            sender_name = adapter.normalize_sender_name(
+                message_obj.sender.nickname if message_obj.sender else None
+            )
+            group_id = adapter.normalize_group_id(message_obj.group_id)
+            raw_channel_id = adapter.extract_channel_id(message_obj)
+            channel_id = adapter.normalize_channel_id(raw_channel_id)
+            message_id = adapter.normalize_message_id(message_obj.message_id)
+            message_type = adapter.determine_message_type(message_obj)
+
             record = MessageRecord(
                 platform=platform,
-                message_id=message_obj.message_id or "",
+                message_id=message_id,
                 session_id=message_obj.session_id or "",
-                group_id=message_obj.group_id,
-                sender_id=message_obj.sender.user_id if message_obj.sender else "",
-                sender_name=message_obj.sender.nickname if message_obj.sender else None,
-                message_type="group" if message_obj.group_id else "private",
+                group_id=group_id,
+                channel_id=channel_id,
+                sender_id=sender_id,
+                sender_name=sender_name,
+                message_type=message_type,
                 message_str=event.message_str,
                 timestamp=normalized_timestamp,
             )
@@ -212,24 +230,22 @@ class MessageRecorder(Star):
             if self.config.get("save_message_chain", True):
                 message_chain = message_obj.message
                 if message_chain:
-                    chain_data = []
-                    download_tasks = []
-                    components_with_data = []
+                    chain_data = serialize_message_chain(message_chain)
 
-                    for comp in message_chain:
-                        comp_data = self._serialize_component(comp)
-                        chain_data.append(comp_data)
-                        if self._media_downloader and self.config.get("save_media_files", False):
-                            components_with_data.append((comp, comp_data))
+                    reply_to = extract_reply_info(chain_data)
+                    if reply_to:
+                        record.reply_to_id = adapter.normalize_message_id(reply_to)
 
-                    if components_with_data:
+                    if self._media_downloader and self.config.get("save_media_files", False):
                         download_tasks = [
-                            self._download_media_for_component(comp, comp_data)
-                            for comp, comp_data in components_with_data
+                            self._download_media_for_component(comp, comp_data, adapter)
+                            for comp, comp_data in zip(message_chain, chain_data)
+                            if comp_data.get("type") in MEDIA_TYPE_MAP
                         ]
-                        await asyncio.gather(*download_tasks, return_exceptions=True)
+                        if download_tasks:
+                            await asyncio.gather(*download_tasks, return_exceptions=True)
 
-                    record.message_chain = json.dumps(chain_data)
+                    record.message_chain = json.dumps(chain_data, ensure_ascii=False)
 
             if self.config.get("save_raw_message", False):
                 raw_msg = message_obj.raw_message
@@ -241,7 +257,14 @@ class MessageRecorder(Star):
 
             record_id = await self._db.save_message(record)
 
-            content_preview = (event.message_str[:30] + "...") if event.message_str and len(event.message_str) > 30 else (event.message_str or "[非文本]")
+            if record_id == -1:
+                return
+
+            content_preview = (
+                (event.message_str[:30] + "...")
+                if event.message_str and len(event.message_str) > 30
+                else (event.message_str or "[非文本]")
+            )
 
             logger.debug(
                 f"[MessageRecorder] 消息保存成功 #{record_id} | "
@@ -254,85 +277,52 @@ class MessageRecorder(Star):
             logger.error(f"[MessageRecorder] 保存消息失败: {e}")
 
     def _get_platform_name(self, event: AstrMessageEvent) -> str:
-        """获取平台名称"""
         try:
             return event.get_platform_name() or "unknown"
         except Exception:
             return "unknown"
 
-    def _serialize_component(self, component) -> dict:
-        """序列化消息组件"""
-        result = {"type": component.__class__.__name__}
-
-        attrs = [
-            "text", "url", "file", "file_id", "file_unique_id",
-            "width", "height", "name", "path",
-        ]
-        for attr in attrs:
-            if hasattr(component, attr):
-                value = getattr(component, attr)
-                if value is not None:
-                    result[attr] = value
-
-        return result
-
-    async def _download_media_for_component(self, component, comp_data: dict):
-        """为消息组件下载多媒体文件"""
+    async def _download_media_for_component(self, component, comp_data: dict, adapter):
         comp_type = comp_data.get("type", "")
         if comp_type not in MEDIA_TYPE_MAP:
             return
 
-        url = self._extract_media_url(component, comp_data)
+        url = adapter.extract_media_url(component, comp_data)
+        if not url:
+            url = serializer_extract_media_url(comp_data)
         if not url:
             return
 
-        try:
-            filename = None
-            if comp_type == "File" and hasattr(component, "name") and component.name:
-                filename = component.name
+        async with self._download_semaphore:
+            try:
+                filename = None
+                if comp_type == "File" and hasattr(component, "name") and component.name:
+                    filename = component.name
 
-            local_path = await self._media_downloader.download_media(
-                url=url,
-                component_type=comp_type,
-                filename=filename,
-            )
-            if local_path:
-                comp_data["local_path"] = local_path
-        except Exception as e:
-            logger.warning(
-                f"[MessageRecorder] 下载多媒体文件失败 "
-                f"(type={comp_type}): {e}"
-            )
-
-    def _extract_media_url(self, component, comp_data: dict) -> Optional[str]:
-        """从消息组件中提取多媒体文件 URL"""
-        if hasattr(component, "url") and component.url:
-            return component.url
-
-        file_val = comp_data.get("file")
-        if isinstance(file_val, str) and file_val.startswith("http"):
-            return file_val
-
-        path_val = comp_data.get("path")
-        if isinstance(path_val, str) and path_val.startswith("http"):
-            return path_val
-
-        return None
+                local_path = await self._media_downloader.download_media(
+                    url=url,
+                    component_type=comp_type,
+                    filename=filename,
+                )
+                if local_path:
+                    comp_data["local_path"] = local_path
+            except Exception as e:
+                logger.warning(
+                    f"[MessageRecorder] 下载多媒体文件失败 "
+                    f"(type={comp_type}): {e}"
+                )
 
     def _check_commands_enabled(self, event: AstrMessageEvent) -> bool:
-        """检查指令功能是否启用"""
         return self.config.get("enable_commands", True)
 
     # ========== 管理指令 ==========
 
     @filter.command_group("msg_record")
     def msg_record():
-        """消息记录指令组"""
         pass
 
     @msg_record.command("stats")
     async def cmd_stats(self, event: AstrMessageEvent):
-        """查看消息统计信息"""
         if not self._check_commands_enabled(event):
             return
         if not self._api:
@@ -347,6 +337,9 @@ class MessageRecorder(Star):
             f"群聊消息: {stats.group_message_count}",
             f"私聊消息: {stats.private_message_count}",
         ]
+
+        if stats.channel_message_count:
+            lines.append(f"频道消息: {stats.channel_message_count}")
 
         if stats.platform_stats:
             lines.append("平台分布:")
@@ -371,7 +364,6 @@ class MessageRecorder(Star):
 
     @msg_record.command("cleanup")
     async def cmd_cleanup(self, event: AstrMessageEvent):
-        """手动触发清理"""
         if not self._check_commands_enabled(event):
             return
         if not self._api:
@@ -385,7 +377,6 @@ class MessageRecorder(Star):
 
     @msg_record.command("query")
     async def cmd_query(self, event: AstrMessageEvent, sender: str = "", limit: int = 10):
-        """查询消息记录 (sender: 发送者ID, limit: 数量)"""
         if not self._check_commands_enabled(event):
             return
         if not self._api:
@@ -408,7 +399,6 @@ class MessageRecorder(Star):
                 time.localtime(msg.timestamp / 1000)
             )
             content = msg.message_str or "[非文本消息]"
-            # 截断长消息
             if len(content) > 50:
                 content = content[:50] + "..."
             lines.append(f"[{time_str}] {msg.sender_name or msg.sender_id}: {content}")
@@ -417,7 +407,6 @@ class MessageRecorder(Star):
 
     @msg_record.command("search")
     async def cmd_search(self, event: AstrMessageEvent, keyword: str, limit: int = 10):
-        """搜索消息内容 (keyword: 关键词, limit: 数量)"""
         if not self._check_commands_enabled(event):
             return
         if not self._api:
@@ -446,7 +435,6 @@ class MessageRecorder(Star):
 
     @msg_record.command("help")
     async def cmd_help(self, event: AstrMessageEvent):
-        """查看帮助信息"""
         if not self._check_commands_enabled(event):
             return
         help_text = """📖 消息记录器帮助
@@ -471,7 +459,6 @@ class MessageRecorder(Star):
 
     @msg_record.command("today")
     async def cmd_today(self, event: AstrMessageEvent, limit: int = 20):
-        """查看今天的消息"""
         if not self._check_commands_enabled(event):
             return
         if not self._api:
@@ -502,7 +489,6 @@ class MessageRecorder(Star):
 
     @msg_record.command("yesterday")
     async def cmd_yesterday(self, event: AstrMessageEvent, limit: int = 20):
-        """查看昨天的消息"""
         if not self._check_commands_enabled(event):
             return
         if not self._api:
@@ -533,7 +519,6 @@ class MessageRecorder(Star):
 
     @msg_record.command("history")
     async def cmd_history(self, event: AstrMessageEvent, time_range: str = "week", limit: int = 30):
-        """按时间范围查询消息"""
         if not self._check_commands_enabled(event):
             return
         if not self._api:

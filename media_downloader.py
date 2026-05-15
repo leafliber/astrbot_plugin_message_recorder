@@ -13,7 +13,7 @@ import aiohttp
 from PIL import Image
 
 from astrbot.api import logger
-from astrbot.core.utils.astrbot_path import get_astrbot_data_path
+from astrbot.core.utils.astrbot_path import get_astrbot_plugin_data_path
 
 
 MEDIA_TYPE_MAP = {
@@ -50,17 +50,26 @@ KNOWN_EXTENSIONS = {
 }
 
 THUMBNAIL_MAX_SIZE = 320
+DEFAULT_MAX_RETRIES = 2
+DEFAULT_RETRY_DELAY = 1.0
 
 
 class MediaDownloader:
     """多媒体文件下载器"""
 
-    def __init__(self, plugin_name: str, image_save_mode: str = "original"):
+    def __init__(
+        self,
+        plugin_name: str,
+        image_save_mode: str = "original",
+        max_retries: int = DEFAULT_MAX_RETRIES,
+        retry_delay: float = DEFAULT_RETRY_DELAY,
+    ):
         self.plugin_name = plugin_name
         self.image_save_mode = image_save_mode
+        self.max_retries = max_retries
+        self.retry_delay = retry_delay
         self.media_base_path = (
-            Path(get_astrbot_data_path())
-            / "plugin_data"
+            Path(get_astrbot_plugin_data_path())
             / plugin_name
             / "media"
         )
@@ -93,68 +102,89 @@ class MediaDownloader:
 
         media_subdir = MEDIA_TYPE_MAP.get(component_type, "files")
 
-        try:
-            session = await self._get_session()
-            async with session.get(url) as resp:
-                if resp.status != 200:
+        for attempt in range(self.max_retries + 1):
+            try:
+                result = await self._do_download(
+                    url, component_type, media_subdir, filename
+                )
+                return result
+            except (aiohttp.ClientError, asyncio.TimeoutError) as e:
+                if attempt < self.max_retries:
+                    logger.debug(
+                        f"[MediaDownloader] 下载失败 (尝试 {attempt + 1}/{self.max_retries + 1}): {e}"
+                    )
+                    await asyncio.sleep(self.retry_delay * (attempt + 1))
+                else:
                     logger.warning(
-                        f"[MediaDownloader] 下载失败: HTTP {resp.status}, URL: {url[:100]}"
+                        f"[MediaDownloader] 下载失败，已重试 {self.max_retries} 次: "
+                        f"URL: {url[:100]}, 错误: {e}"
                     )
                     return None
+            except Exception as e:
+                logger.warning(f"[MediaDownloader] 下载出错: {e}")
+                return None
 
-                content = await resp.read()
-                if not content:
-                    logger.warning("[MediaDownloader] 下载内容为空")
-                    return None
+    async def _do_download(
+        self,
+        url: str,
+        component_type: str,
+        media_subdir: str,
+        filename: Optional[str],
+    ) -> Optional[str]:
+        session = await self._get_session()
+        async with session.get(url) as resp:
+            if resp.status != 200:
+                logger.warning(
+                    f"[MediaDownloader] 下载失败: HTTP {resp.status}, URL: {url[:100]}"
+                )
+                return None
 
-                content_type = resp.headers.get("Content-Type", "")
-                ext = self._determine_extension(url, content_type, component_type)
+            content = await resp.read()
+            if not content:
+                logger.warning("[MediaDownloader] 下载内容为空")
+                return None
 
+            content_type = resp.headers.get("Content-Type", "")
+            ext = self._determine_extension(url, content_type, component_type)
+
+            content_hash = hashlib.sha256(content).hexdigest()[:16]
+
+            if not filename:
+                filename = f"{content_hash}{ext}"
+
+            date_dir = self._get_date_dir(media_subdir)
+            date_dir.mkdir(parents=True, exist_ok=True)
+
+            file_path = date_dir / filename
+
+            if file_path.exists():
+                rel_path = file_path.relative_to(self.media_base_path)
+                logger.debug(
+                    f"[MediaDownloader] 文件已存在，跳过保存: {rel_path}"
+                )
+                return str(rel_path)
+
+            if component_type == "Image" and self.image_save_mode == "thumbnail":
+                content = self._create_thumbnail(content)
                 content_hash = hashlib.sha256(content).hexdigest()[:16]
-
-                if not filename:
-                    filename = f"{content_hash}{ext}"
-
-                date_dir = self._get_date_dir(media_subdir)
-                date_dir.mkdir(parents=True, exist_ok=True)
-
+                filename = f"{content_hash}{ext}"
                 file_path = date_dir / filename
 
                 if file_path.exists():
                     rel_path = file_path.relative_to(self.media_base_path)
                     logger.debug(
-                        f"[MediaDownloader] 文件已存在，跳过保存: {rel_path}"
+                        f"[MediaDownloader] 缩略图已存在，跳过保存: {rel_path}"
                     )
                     return str(rel_path)
 
-                if component_type == "Image" and self.image_save_mode == "thumbnail":
-                    content = self._create_thumbnail(content)
-                    content_hash = hashlib.sha256(content).hexdigest()[:16]
-                    filename = f"{content_hash}{ext}"
-                    file_path = date_dir / filename
+            file_path.write_bytes(content)
 
-                    if file_path.exists():
-                        rel_path = file_path.relative_to(self.media_base_path)
-                        logger.debug(
-                            f"[MediaDownloader] 缩略图已存在，跳过保存: {rel_path}"
-                        )
-                        return str(rel_path)
-
-                file_path.write_bytes(content)
-
-                rel_path = file_path.relative_to(self.media_base_path)
-                logger.debug(
-                    f"[MediaDownloader] 文件已保存: {rel_path} "
-                    f"({len(content)} bytes)"
-                )
-                return str(rel_path)
-
-        except asyncio.TimeoutError:
-            logger.warning(f"[MediaDownloader] 下载超时: {url[:100]}")
-            return None
-        except Exception as e:
-            logger.warning(f"[MediaDownloader] 下载出错: {e}")
-            return None
+            rel_path = file_path.relative_to(self.media_base_path)
+            logger.debug(
+                f"[MediaDownloader] 文件已保存: {rel_path} "
+                f"({len(content)} bytes)"
+            )
+            return str(rel_path)
 
     def _create_thumbnail(self, image_data: bytes) -> bytes:
         try:
@@ -222,21 +252,8 @@ class MediaDownloader:
 
     @staticmethod
     def extract_media_paths(message_chain_json: Optional[str]) -> List[str]:
-        if not message_chain_json:
-            return []
-        try:
-            chain = json.loads(message_chain_json)
-            if not isinstance(chain, list):
-                return []
-            paths = []
-            for comp in chain:
-                if isinstance(comp, dict) and "local_path" in comp:
-                    lp = comp["local_path"]
-                    if isinstance(lp, str) and lp:
-                        paths.append(lp)
-            return paths
-        except (json.JSONDecodeError, TypeError, ValueError):
-            return []
+        from .serializer import extract_media_paths as _extract
+        return _extract(message_chain_json)
 
     def cleanup_orphaned_media(self, retention_days: int) -> int:
         if retention_days <= 0:

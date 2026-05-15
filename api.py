@@ -7,7 +7,7 @@ from astrbot.api import logger
 from astrbot.core.utils.astrbot_path import get_astrbot_plugin_data_path
 
 from .database import Database
-from .models import MessageRecord, QueryFilter, MessageStats, PLUGIN_DIR_NAME
+from .models import MessageRecord, QueryFilter, MessageStats, PLUGIN_DIR_NAME, SCHEMA_VERSION
 from .media_downloader import MediaDownloader
 
 
@@ -91,6 +91,15 @@ class MessageRecorderAPI:
         """
         return MediaDownloader.extract_media_paths(message.message_chain)
 
+    def get_schema_version(self) -> int:
+        """
+        获取当前数据库 schema 版本
+
+        Returns:
+            schema 版本号
+        """
+        return SCHEMA_VERSION
+
     # ========== 核心查询方法 ==========
 
     async def query(
@@ -103,11 +112,13 @@ class MessageRecorderAPI:
         group_ids: Optional[List[str]] = None,
         session_id: Optional[str] = None,
         session_ids: Optional[List[str]] = None,
+        channel_id: Optional[str] = None,
         message_type: Optional[str] = None,
         time: Optional[str] = None,
         start_time: Optional[int] = None,
         end_time: Optional[int] = None,
         keyword: Optional[str] = None,
+        reply_to_id: Optional[str] = None,
         limit: int = 100,
         offset: int = 0,
         order: str = "desc",
@@ -124,7 +135,8 @@ class MessageRecorderAPI:
             group_ids: 多个群组 ID 列表
             session_id: 单个会话 ID
             session_ids: 多个会话 ID 列表
-            message_type: 消息类型 ("group" 或 "private")
+            channel_id: 频道 ID（Discord 等平台）
+            message_type: 消息类型 ("group"、"private"、"channel")
             time: 时间字符串，支持:
                 - 自然语言: today, yesterday, week, month, hour
                 - 天数范围: last7d, last30d, last3d
@@ -135,6 +147,7 @@ class MessageRecorderAPI:
             start_time: 开始时间戳（毫秒），与 time 互斥
             end_time: 结束时间戳（毫秒），与 time 互斥
             keyword: 消息内容关键词
+            reply_to_id: 回复的目标消息 ID
             limit: 返回数量限制
             offset: 偏移量（用于分页）
             order: 排序方式 ("desc" 倒序, "asc" 正序)
@@ -154,17 +167,23 @@ class MessageRecorderAPI:
                 keyword="hello"
             )
 
-            # 多发送者查询
+            # 查询频道消息
             messages = await mr_api.query(
-                sender_ids=["user1", "user2", "user3"],
-                time="last7d"
+                channel_id="987654",
+                time="week"
+            )
+
+            # 查询回复某消息的所有消息
+            messages = await mr_api.query(
+                reply_to_id="12345",
+                platform="discord"
             )
 
             # 分页查询
             messages = await mr_api.query(
                 group_id="123456",
                 limit=20,
-                offset=40  # 第三页
+                offset=40
             )
         """
         query_filter = QueryFilter(
@@ -176,11 +195,13 @@ class MessageRecorderAPI:
             group_ids=group_ids,
             session_id=session_id,
             session_ids=session_ids,
+            channel_id=channel_id,
             message_type=message_type,
             time=time,
             start_time=start_time,
             end_time=end_time,
             keyword=keyword,
+            reply_to_id=reply_to_id,
             limit=limit,
             offset=offset,
             order=order,
@@ -197,11 +218,13 @@ class MessageRecorderAPI:
         group_ids: Optional[List[str]] = None,
         session_id: Optional[str] = None,
         session_ids: Optional[List[str]] = None,
+        channel_id: Optional[str] = None,
         message_type: Optional[str] = None,
         time: Optional[str] = None,
         start_time: Optional[int] = None,
         end_time: Optional[int] = None,
         keyword: Optional[str] = None,
+        reply_to_id: Optional[str] = None,
     ) -> int:
         """
         统一统计方法 - 支持任意条件组合
@@ -215,12 +238,8 @@ class MessageRecorderAPI:
             # 统计今天的消息
             count = await mr_api.count(time="today")
 
-            # 统计某群组某用户的消息
-            count = await mr_api.count(
-                group_id="123456",
-                sender_id="user1",
-                time="month"
-            )
+            # 统计某频道的消息
+            count = await mr_api.count(channel_id="987654", time="month")
         """
         query_filter = QueryFilter(
             platform=platform,
@@ -231,11 +250,13 @@ class MessageRecorderAPI:
             group_ids=group_ids,
             session_id=session_id,
             session_ids=session_ids,
+            channel_id=channel_id,
             message_type=message_type,
             time=time,
             start_time=start_time,
             end_time=end_time,
             keyword=keyword,
+            reply_to_id=reply_to_id,
         )
         return await self.db.count_messages(query_filter)
 
@@ -247,7 +268,7 @@ class MessageRecorderAPI:
 
         Args:
             limit: 返回数量限制
-            **kwargs: 其他筛选条件（platform, group_id 等）
+            **kwargs: 其他筛选条件（platform, group_id, channel_id 等）
 
         Examples:
             messages = await mr_api.get_today(limit=20)
@@ -280,7 +301,7 @@ class MessageRecorderAPI:
             **kwargs: 其他筛选条件
 
         Examples:
-            messages = await mr_api.get_recent(hours=6)  # 最近6小时
+            messages = await mr_api.get_recent(hours=6)
         """
         time_str = f"last{hours}h"
         return await self.query(time=time_str, limit=limit, **kwargs)
@@ -300,7 +321,7 @@ class MessageRecorderAPI:
             **kwargs: 其他筛选条件
 
         Examples:
-            messages = await mr_api.get_recent_days(days=30)  # 最近30天
+            messages = await mr_api.get_recent_days(days=30)
         """
         time_str = f"last{days}d"
         return await self.query(time=time_str, limit=limit, **kwargs)
@@ -354,10 +375,6 @@ class MessageRecorderAPI:
             消息记录，不存在则返回 None
 
         Examples:
-            # 不指定平台（可能匹配多个平台的相同 message_id）
-            message = await mr_api.get_by_platform_message_id("12345678")
-
-            # 指定平台（推荐，更精确）
             message = await mr_api.get_by_platform_message_id("12345678", platform="telegram")
             message = await mr_api.get_by_platform_message_id("987654321", platform="discord")
         """
@@ -376,6 +393,54 @@ class MessageRecorderAPI:
                 f"platform={platform}"
             )
         return result
+
+    async def get_replies(
+        self,
+        reply_to_id: str,
+        platform: Optional[str] = None,
+        limit: int = 50,
+    ) -> List[MessageRecord]:
+        """
+        获取回复某消息的所有消息
+
+        Args:
+            reply_to_id: 被回复的消息 ID（平台原始消息 ID）
+            platform: 可选的平台名称
+            limit: 返回数量限制
+
+        Returns:
+            回复消息列表
+
+        Examples:
+            replies = await mr_api.get_replies("12345678", platform="telegram")
+        """
+        logger.debug(
+            f"[MessageRecorder] API调用: get_replies({reply_to_id}, platform={platform})"
+        )
+        return await self.query(
+            reply_to_id=reply_to_id,
+            platform=platform,
+            limit=limit,
+        )
+
+    async def get_by_channel(
+        self,
+        channel_id: str,
+        limit: int = 50,
+        **kwargs
+    ) -> List[MessageRecord]:
+        """
+        获取指定频道的消息
+
+        Args:
+            channel_id: 频道 ID
+            limit: 返回数量限制
+            **kwargs: 其他筛选条件
+
+        Examples:
+            messages = await mr_api.get_by_channel("987654", time="week")
+        """
+        return await self.query(channel_id=channel_id, limit=limit, **kwargs)
 
     async def get_context(
         self,
@@ -412,6 +477,7 @@ class MessageRecorderAPI:
             - total_count: 总消息数
             - group_message_count: 群聊消息数
             - private_message_count: 私聊消息数
+            - channel_message_count: 频道消息数
             - platform_stats: 各平台消息数
             - oldest_timestamp: 最早消息时间
             - newest_timestamp: 最新消息时间
@@ -420,6 +486,7 @@ class MessageRecorderAPI:
         result = await self.db.get_stats()
         logger.debug(
             f"[MessageRecorder] 统计结果: total={result.total_count}, "
-            f"group={result.group_message_count}, private={result.private_message_count}"
+            f"group={result.group_message_count}, private={result.private_message_count}, "
+            f"channel={result.channel_message_count}"
         )
         return result

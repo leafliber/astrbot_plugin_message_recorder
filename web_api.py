@@ -18,10 +18,8 @@ from astrbot.api import logger
 from astrbot.core.utils.astrbot_path import get_astrbot_plugin_data_path
 
 from .database import Database
-from .models import QueryFilter, MessageRecord, MessageStats, PLUGIN_DIR_NAME
-from .time_utils import parse_time_range
-
-PLUGIN_NAME = "astrbot_plugin_message_recorder"
+from .models import QueryFilter, MessageRecord, MessageStats, PLUGIN_DIR_NAME, SCHEMA_VERSION
+from .time_utils import parse_time_range, normalize_timestamp
 
 MAX_IMPORT_FILE_SIZE = 4 * 1024 * 1024 * 1024
 MAX_EXPORT_FILE_AGE = 3600
@@ -37,7 +35,7 @@ _import_tasks: Dict[str, Dict[str, Any]] = {}
 
 
 def _get_plugin_data_dir() -> Path:
-    return Path(get_astrbot_plugin_data_path()) / PLUGIN_NAME
+    return Path(get_astrbot_plugin_data_path()) / PLUGIN_DIR_NAME
 
 
 def _format_timestamp(ts: int) -> str:
@@ -51,8 +49,10 @@ def _format_message(msg: MessageRecord) -> Dict[str, Any]:
         "sender_id": msg.sender_id,
         "sender_name": msg.sender_name,
         "group_id": msg.group_id,
+        "channel_id": msg.channel_id,
         "message_type": msg.message_type,
         "message_str": msg.message_str,
+        "reply_to_id": msg.reply_to_id,
         "timestamp": msg.timestamp,
         "formatted_time": _format_timestamp(msg.timestamp),
         "has_chain": bool(msg.message_chain),
@@ -93,8 +93,10 @@ def _format_message_for_export(msg: MessageRecord, include_chain: bool = True, i
         "sender_id": msg.sender_id,
         "sender_name": msg.sender_name,
         "group_id": msg.group_id,
+        "channel_id": msg.channel_id,
         "message_type": msg.message_type,
         "message_str": msg.message_str,
+        "reply_to_id": msg.reply_to_id,
         "timestamp": msg.timestamp,
         "formatted_time": _format_timestamp(msg.timestamp),
         "message_id": msg.message_id,
@@ -154,11 +156,13 @@ def _build_query_filter(args: Dict[str, Any]) -> QueryFilter:
         group_ids=group_ids,
         session_id=session_id,
         session_ids=session_ids,
+        channel_id=args.get("channel_id"),
         message_type=args.get("message_type"),
         time=args.get("time"),
         start_time=start_time,
         end_time=end_time,
         keyword=args.get("keyword"),
+        reply_to_id=args.get("reply_to_id"),
         limit=limit,
         offset=offset,
         order=order,
@@ -181,11 +185,13 @@ def _build_query_filter_from_dict(data: Dict[str, Any]) -> QueryFilter:
         group_ids=data.get("group_ids"),
         session_id=data.get("session_id"),
         session_ids=data.get("session_ids"),
+        channel_id=data.get("channel_id"),
         message_type=data.get("message_type"),
         time=data.get("time"),
         start_time=data.get("start_time"),
         end_time=data.get("end_time"),
         keyword=data.get("keyword"),
+        reply_to_id=data.get("reply_to_id"),
         limit=effective_limit,
         offset=data.get("offset", 0),
         order=data.get("order", "desc"),
@@ -249,7 +255,7 @@ def _cleanup_temp_dir() -> None:
 def register_all_web_apis(context, db: Database):
     _cleanup_temp_dir()
 
-    prefix = f"/{PLUGIN_NAME}"
+    prefix = f"/{PLUGIN_DIR_NAME}"
 
     # ========== Stats APIs ==========
 
@@ -269,11 +275,13 @@ def register_all_web_apis(context, db: Database):
                     "total_count": stats.total_count,
                     "group_message_count": stats.group_message_count,
                     "private_message_count": stats.private_message_count,
+                    "channel_message_count": stats.channel_message_count,
                     "platform_stats": stats.platform_stats,
                     "platform_count": len(stats.platform_stats),
                     "oldest_timestamp": stats.oldest_timestamp,
                     "newest_timestamp": stats.newest_timestamp,
                     "time_range": time_range,
+                    "schema_version": SCHEMA_VERSION,
                 },
             })
         except Exception as e:
@@ -522,30 +530,27 @@ def register_all_web_apis(context, db: Database):
             return jsonify({"success": False, "error": "数据库未初始化"})
         try:
             files = await request.files
-            if "file" not in files:
-                return jsonify({"success": False, "error": "缺少文件"})
-
-            mode = request.form.get("mode", "merge") if hasattr(request, 'form') else "merge"
-
-            chunk_file = files["file"]
-            temp_dir = _get_plugin_data_dir() / "temp"
-            temp_dir.mkdir(parents=True, exist_ok=True)
-
-            task_id = f"import_{uuid.uuid4().hex[:12]}"
-            file_ext = Path(chunk_file.filename).suffix.lower() if chunk_file.filename else ".json"
-            temp_file = temp_dir / f"{task_id}{file_ext}"
-            await chunk_file.save(str(temp_file))
-
-            actual_size = temp_file.stat().st_size
-            if actual_size > MAX_IMPORT_FILE_SIZE:
-                temp_file.unlink()
+            if not files or "file" not in files:
+                return jsonify({"success": False, "error": "未上传文件"})
+            uploaded_file = files["file"]
+            filename = uploaded_file.filename or "import.json"
+            file_ext = Path(filename).suffix.lower()
+            if file_ext not in ALLOWED_IMPORT_EXTENSIONS:
+                return jsonify({"success": False, "error": f"不支持的文件格式: {file_ext}"})
+            content = uploaded_file.read()
+            if len(content) > MAX_IMPORT_FILE_SIZE:
                 max_gb = MAX_IMPORT_FILE_SIZE // (1024 * 1024 * 1024)
                 return jsonify({"success": False, "error": f"文件大小超过限制（最大 {max_gb}GB）"})
-
+            temp_dir = _get_plugin_data_dir() / "temp"
+            temp_dir.mkdir(parents=True, exist_ok=True)
+            task_id = f"import_{uuid.uuid4().hex[:12]}"
+            temp_file = temp_dir / f"{task_id}{file_ext}"
+            temp_file.write_bytes(content)
+            mode = request.form.get("mode", "skip_duplicates")
             _import_tasks[task_id] = {
                 "status": "pending",
                 "mode": mode,
-                "filename": chunk_file.filename or "unknown",
+                "filename": filename,
                 "file_path": str(temp_file),
                 "created_at": time.time(),
                 "total_records": 0,
@@ -557,21 +562,19 @@ def register_all_web_apis(context, db: Database):
                 "completed_at": None,
                 "error": None,
             }
-
             asyncio.create_task(_execute_import_task(task_id, db, str(temp_file), mode))
-
             return jsonify({
                 "success": True,
                 "data": {
                     "task_id": task_id,
                     "status": "pending",
-                    "filename": chunk_file.filename or "unknown",
+                    "filename": filename,
                     "mode": mode,
-                    "file_size": actual_size,
+                    "file_size": len(content),
                 },
             })
         except Exception as e:
-            logger.error(f"[MessageRecorder Web] 简单导入失败: {e}")
+            logger.error(f"[MessageRecorder Web] 导入上传失败: {e}")
             return jsonify({"success": False, "error": str(e)})
 
     async def api_import_init():
@@ -579,67 +582,63 @@ def register_all_web_apis(context, db: Database):
             data = await request.get_json()
             filename = data.get("filename", "")
             file_size = data.get("file_size", 0)
+            chunk_size = data.get("chunk_size", CHUNK_SIZE)
             mode = data.get("mode", "skip_duplicates")
-
+            file_ext = Path(filename).suffix.lower() if filename else ".json"
+            if file_ext not in ALLOWED_IMPORT_EXTENSIONS:
+                return jsonify({"success": False, "error": f"不支持的文件格式: {file_ext}"})
             if file_size > MAX_IMPORT_FILE_SIZE:
                 max_gb = MAX_IMPORT_FILE_SIZE // (1024 * 1024 * 1024)
                 return jsonify({"success": False, "error": f"文件大小超过限制（最大 {max_gb}GB）"})
-
-            file_ext = Path(filename).suffix.lower()
-            if file_ext not in ALLOWED_IMPORT_EXTENSIONS:
-                return jsonify({"success": False, "error": "不支持的文件格式，仅支持 .json, .csv, .mrpkg"})
-
-            total_chunks = (file_size + CHUNK_SIZE - 1) // CHUNK_SIZE if file_size > 0 else 1
+            total_chunks = (file_size + chunk_size - 1) // chunk_size if chunk_size > 0 else 1
             session_id = uuid.uuid4().hex
-            temp_dir = _get_plugin_data_dir() / "temp" / "chunks" / session_id
-            temp_dir.mkdir(parents=True, exist_ok=True)
-
+            chunks_dir = _get_plugin_data_dir() / "temp" / f"chunks_{session_id}"
+            chunks_dir.mkdir(parents=True, exist_ok=True)
             _chunk_sessions[session_id] = {
                 "filename": filename,
                 "file_ext": file_ext,
                 "file_size": file_size,
+                "chunk_size": chunk_size,
                 "total_chunks": total_chunks,
-                "uploaded_chunks": [],
                 "mode": mode,
-                "chunks_dir": str(temp_dir),
+                "chunks_dir": str(chunks_dir),
+                "uploaded_chunks": [],
                 "created_at": time.time(),
             }
-
             return jsonify({
                 "success": True,
-                "data": {"session_id": session_id, "total_chunks": total_chunks, "chunk_size": CHUNK_SIZE},
+                "data": {
+                    "session_id": session_id,
+                    "total_chunks": total_chunks,
+                    "chunk_size": chunk_size,
+                },
             })
         except Exception as e:
-            logger.error(f"[MessageRecorder Web] 初始化分片上传失败: {e}")
+            logger.error(f"[MessageRecorder Web] 初始化分片导入失败: {e}")
             return jsonify({"success": False, "error": str(e)})
 
-    async def api_import_chunk(session_id: str = "", chunk_index: int = 0):
+    async def api_import_chunk(session_id, chunk_index):
+        session = _chunk_sessions.get(session_id)
+        if not session:
+            return jsonify({"success": False, "error": "会话不存在或已过期"})
+        if chunk_index >= session["total_chunks"] or chunk_index < 0:
+            return jsonify({"success": False, "error": "分片索引无效"})
         try:
-            if not session_id:
-                return jsonify({"success": False, "error": "缺少session_id"})
-            session = _chunk_sessions.get(session_id)
-            if not session:
-                return jsonify({"success": False, "error": "上传会话不存在或已过期"})
-            if chunk_index < 0 or chunk_index >= session["total_chunks"]:
-                return jsonify({"success": False, "error": "无效的分片索引"})
-
             files = await request.files
-            if "file" not in files:
-                return jsonify({"success": False, "error": "缺少分片数据"})
-
-            chunk_file = files["file"]
+            if not files or "chunk" not in files:
+                return jsonify({"success": False, "error": "未上传分片"})
+            chunk_file = files["chunk"]
+            chunk_data = chunk_file.read()
             chunk_path = Path(session["chunks_dir"]) / f"{chunk_index:06d}"
-            await chunk_file.save(str(chunk_path))
-
+            chunk_path.write_bytes(chunk_data)
             if chunk_index not in session["uploaded_chunks"]:
                 session["uploaded_chunks"].append(chunk_index)
-
             return jsonify({
                 "success": True,
                 "data": {
                     "session_id": session_id,
                     "chunk_index": chunk_index,
-                    "uploaded_count": len(session["uploaded_chunks"]),
+                    "uploaded_chunks": len(session["uploaded_chunks"]),
                     "total_chunks": session["total_chunks"],
                 },
             })
@@ -648,14 +647,14 @@ def register_all_web_apis(context, db: Database):
             return jsonify({"success": False, "error": str(e)})
 
     async def api_import_complete():
-        if not db:
-            return jsonify({"success": False, "error": "数据库未初始化"})
         try:
             data = await request.get_json()
-            session_id = data.get("session_id", "")
+            session_id = data.get("session_id")
+            if not session_id:
+                return jsonify({"success": False, "error": "缺少会话ID"})
             session = _chunk_sessions.get(session_id)
             if not session:
-                return jsonify({"success": False, "error": "上传会话不存在或已过期"})
+                return jsonify({"success": False, "error": "会话不存在或已过期"})
 
             if len(session["uploaded_chunks"]) < session["total_chunks"]:
                 missing = set(range(session["total_chunks"])) - set(session["uploaded_chunks"])
@@ -778,6 +777,15 @@ def register_all_web_apis(context, db: Database):
             return jsonify({"success": False, "error": "非法路径"}), 403
         return await send_file(str(resolved_path))
 
+    async def api_schema_version():
+        return jsonify({
+            "success": True,
+            "data": {
+                "schema_version": SCHEMA_VERSION,
+                "plugin_version": "2.0.0",
+            },
+        })
+
     # ========== Register all APIs ==========
 
     context.register_web_api(f"{prefix}/stats", api_stats, ["GET"], "获取统计概览")
@@ -800,8 +808,9 @@ def register_all_web_apis(context, db: Database):
     context.register_web_api(f"{prefix}/senders", api_senders, ["GET"], "获取发送者列表")
     context.register_web_api(f"{prefix}/groups", api_groups, ["GET"], "获取群组列表")
     context.register_web_api(f"{prefix}/media", api_media, ["GET"], "获取媒体文件")
+    context.register_web_api(f"{prefix}/schema_version", api_schema_version, ["GET"], "获取数据库Schema版本")
 
-    logger.info(f"[MessageRecorder] 已注册 {20} 个 Web API")
+    logger.info(f"[MessageRecorder] 已注册 {21} 个 Web API")
 
 
 # ========== Export Task Execution ==========
@@ -858,7 +867,8 @@ async def _export_json(task_id, db, query_filter, export_dir, include_chain, inc
         f.write("{\n")
         f.write('  "export_info": {\n')
         f.write('    "plugin": "astrbot_plugin_message_recorder",\n')
-        f.write('    "version": "1.0.0",\n')
+        f.write('    "version": "2.0.0",\n')
+        f.write(f'    "schema_version": {SCHEMA_VERSION},\n')
         f.write(f'    "export_time": {int(time.time() * 1000)},\n')
         f.write(f'    "filters": {json.dumps(task["filter"], ensure_ascii=False)},\n')
         f.write('    "total_records": "PENDING"\n')
@@ -890,9 +900,9 @@ async def _export_csv(task_id, db, query_filter, export_dir, task):
     count = 0
     with open(file_path, "w", encoding="utf-8", newline="") as f:
         writer = csv.writer(f)
-        writer.writerow(["id", "platform", "sender_id", "sender_name", "group_id", "message_type", "message_str", "timestamp", "created_at"])
+        writer.writerow(["id", "platform", "sender_id", "sender_name", "group_id", "channel_id", "message_type", "message_str", "reply_to_id", "timestamp", "created_at"])
         async for msg in db.query_messages_batch(query_filter):
-            writer.writerow([msg.id, msg.platform, msg.sender_id, msg.sender_name or "", msg.group_id or "", msg.message_type, msg.message_str or "", msg.timestamp, msg.created_at])
+            writer.writerow([msg.id, msg.platform, msg.sender_id, msg.sender_name or "", msg.group_id or "", msg.channel_id or "", msg.message_type, msg.message_str or "", msg.reply_to_id or "", msg.timestamp, msg.created_at])
             count += 1
     task["actual_count"] = count
     return file_path
@@ -904,16 +914,18 @@ async def _export_txt(task_id, db, query_filter, export_dir, task):
     with open(file_path, "w", encoding="utf-8") as f:
         f.write("=== 导出信息 ===\n")
         f.write("插件: astrbot_plugin_message_recorder\n")
+        f.write(f"版本: 2.0.0 (schema v{SCHEMA_VERSION})\n")
         f.write(f"导出时间: {_format_timestamp(int(time.time() * 1000))}\n")
         f.write("总记录数: PENDING\n\n")
         f.write("=== 消息记录 ===\n\n")
         async for msg in db.query_messages_batch(query_filter):
             time_str = _format_timestamp(msg.timestamp)
-            group_info = f"[群聊:{msg.group_id}]" if msg.group_id else "[私聊]"
+            group_info = f"[群聊:{msg.group_id}]" if msg.group_id else (f"[频道:{msg.channel_id}]" if msg.channel_id else "[私聊]")
             sender = msg.sender_name or msg.sender_id
             content = msg.message_str or "[非文本消息]"
             platform_icon = _get_platform_icon(msg.platform)
-            f.write(f"[{time_str}] {platform_icon} {group_info} {sender}: {content}\n")
+            reply_info = f" ↩{msg.reply_to_id}" if msg.reply_to_id else ""
+            f.write(f"[{time_str}] {platform_icon} {group_info} {sender}: {content}{reply_info}\n")
             count += 1
     with open(file_path, "r+", encoding="utf-8") as f:
         content = f.read()
@@ -935,7 +947,8 @@ async def _export_with_media(task_id, db, query_filter, export_dir, include_chai
         f.write("{\n")
         f.write('  "export_info": {\n')
         f.write('    "plugin": "astrbot_plugin_message_recorder",\n')
-        f.write('    "version": "1.0.0",\n')
+        f.write('    "version": "2.0.0",\n')
+        f.write(f'    "schema_version": {SCHEMA_VERSION},\n')
         f.write(f'    "export_time": {int(time.time() * 1000)},\n')
         f.write(f'    "filters": {json.dumps(task["filter"], ensure_ascii=False)},\n')
         f.write('    "total_records": "PENDING",\n')
@@ -990,7 +1003,7 @@ async def _export_with_media(task_id, db, query_filter, export_dir, include_chai
 
 async def _execute_import_task(task_id: str, db: Database, file_path: str, mode: str):
     MAX_FIELD_LENGTH = 65535
-    VALID_MESSAGE_TYPES = {"group", "private"}
+    VALID_MESSAGE_TYPES = {"group", "private", "channel", "forum"}
 
     def sanitize_import_record(record: dict) -> Optional[dict]:
         if not isinstance(record, dict):
@@ -1021,17 +1034,25 @@ async def _execute_import_task(task_id: str, db: Database, file_path: str, mode:
                     raw_message = json.loads(str(raw_message))
                 except (json.JSONDecodeError, TypeError):
                     raw_message = None
+        channel_id = record.get("channel_id")
+        if channel_id is not None:
+            channel_id = str(channel_id).strip()[:128] or None
+        reply_to_id = record.get("reply_to_id")
+        if reply_to_id is not None:
+            reply_to_id = str(reply_to_id).strip()[:128] or None
         return {
             "platform": platform,
             "message_id": str(record.get("message_id", ""))[:128],
             "session_id": str(record.get("session_id", ""))[:128],
             "group_id": str(record.get("group_id"))[:128] if record.get("group_id") else None,
+            "channel_id": channel_id,
             "sender_id": str(record.get("sender_id", ""))[:128],
             "sender_name": sender_name,
             "message_type": message_type,
             "message_str": message_str,
             "message_chain": message_chain,
             "raw_message": raw_message,
+            "reply_to_id": reply_to_id,
             "timestamp": record.get("timestamp"),
             "created_at": record.get("created_at"),
         }
@@ -1109,23 +1130,27 @@ async def _execute_import_task(task_id: str, db: Database, file_path: str, mode:
                         skipped += 1
                         continue
                     try:
-                        from .time_utils import normalize_timestamp
                         msg_record = MessageRecord(
                             platform=platform,
                             message_id=message_id,
                             session_id=sanitized["session_id"],
                             group_id=sanitized["group_id"],
+                            channel_id=sanitized["channel_id"],
                             sender_id=sanitized["sender_id"],
                             sender_name=sanitized["sender_name"],
                             message_type=sanitized["message_type"],
                             message_str=sanitized["message_str"],
                             message_chain=json.dumps(sanitized["message_chain"]) if sanitized["message_chain"] else None,
                             raw_message=json.dumps(sanitized["raw_message"]) if sanitized["raw_message"] else None,
+                            reply_to_id=sanitized["reply_to_id"],
                             timestamp=normalize_timestamp(sanitized["timestamp"]),
                             created_at=normalize_timestamp(sanitized["created_at"]),
                         )
-                        await asyncio.wait_for(db.save_message(msg_record), timeout=IMPORT_RECORD_TIMEOUT)
-                        imported += 1
+                        saved_id = await asyncio.wait_for(db.save_message(msg_record), timeout=IMPORT_RECORD_TIMEOUT)
+                        if saved_id == -1:
+                            skipped += 1
+                        else:
+                            imported += 1
                     except asyncio.TimeoutError:
                         errors += 1
                     except Exception:
@@ -1138,23 +1163,27 @@ async def _execute_import_task(task_id: str, db: Database, file_path: str, mode:
                     if sanitized is None:
                         errors += 1
                         continue
-                    from .time_utils import normalize_timestamp
                     msg_record = MessageRecord(
                         platform=sanitized["platform"],
                         message_id=sanitized["message_id"],
                         session_id=sanitized["session_id"],
                         group_id=sanitized["group_id"],
+                        channel_id=sanitized["channel_id"],
                         sender_id=sanitized["sender_id"],
                         sender_name=sanitized["sender_name"],
                         message_type=sanitized["message_type"],
                         message_str=sanitized["message_str"],
                         message_chain=json.dumps(sanitized["message_chain"]) if sanitized["message_chain"] else None,
                         raw_message=json.dumps(sanitized["raw_message"]) if sanitized["raw_message"] else None,
+                        reply_to_id=sanitized["reply_to_id"],
                         timestamp=normalize_timestamp(sanitized["timestamp"]),
                         created_at=normalize_timestamp(sanitized["created_at"]),
                     )
-                    await asyncio.wait_for(db.save_message(msg_record), timeout=IMPORT_RECORD_TIMEOUT)
-                    imported += 1
+                    saved_id = await asyncio.wait_for(db.save_message(msg_record), timeout=IMPORT_RECORD_TIMEOUT)
+                    if saved_id == -1:
+                        skipped += 1
+                    else:
+                        imported += 1
                 except asyncio.TimeoutError:
                     errors += 1
                 except Exception:
@@ -1255,7 +1284,6 @@ async def cleanup_expired_tasks():
                     expired_imports.append(task_id)
             for task_id in expired_imports:
                 _import_tasks.pop(task_id, None)
-
         except asyncio.CancelledError:
             break
         except Exception as e:
