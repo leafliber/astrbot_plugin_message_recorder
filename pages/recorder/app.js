@@ -187,6 +187,14 @@ function escapeHtml(str) {
   return div.innerHTML;
 }
 
+function formatFileSize(bytes) {
+  if (!bytes || bytes <= 0) return '0 B';
+  const units = ['B', 'KB', 'MB', 'GB', 'TB'];
+  const i = Math.floor(Math.log(bytes) / Math.log(1024));
+  const val = bytes / Math.pow(1024, i);
+  return val.toFixed(i === 0 ? 0 : 1) + ' ' + units[i];
+}
+
 function truncate(str, maxLen = 100) {
   if (!str) return '';
   if (str.length <= maxLen) return str;
@@ -794,7 +802,9 @@ async function pollExportStatus(taskId) {
       const task = extractData(raw);
 
       if (task.status === 'completed') {
-        if (progressEl) progressEl.innerHTML = `<p>✅ 导出完成！共 ${task.actual_count || 0} 条记录</p><button id="downloadLink" class="btn btn-success">下载文件</button>`;
+        const sizeStr = task.file_size ? formatFileSize(task.file_size) : '';
+        const sizeInfo = sizeStr ? ` (${sizeStr})` : '';
+        if (progressEl) progressEl.innerHTML = `<p>✅ 导出完成！共 ${task.actual_count || 0} 条记录${sizeInfo}</p><button id="downloadLink" class="btn btn-success">下载文件</button>`;
         document.getElementById('downloadLink')?.addEventListener('click', (e) => {
           e.preventDefault();
           downloadExportFile(taskId);
@@ -804,7 +814,8 @@ async function pollExportStatus(taskId) {
         if (progressEl) progressEl.innerHTML = `<p class="text-muted">❌ 导出失败: ${escapeHtml(task.error)}</p>`;
         document.getElementById('startExport').disabled = false;
       } else {
-        if (progressEl) progressEl.innerHTML = `<p>导出中... (状态: ${task.status})</p>`;
+        const progressInfo = task.progress ? ` - ${escapeHtml(task.progress)}` : '';
+        if (progressEl) progressEl.innerHTML = `<p>导出中... (状态: ${task.status})${progressInfo}</p>`;
         setTimeout(poll, 2000);
       }
     } catch (e) {
@@ -823,24 +834,32 @@ async function downloadExportFile(taskId) {
     return;
   }
   try {
-    const result = await apiGet('export/download_data', { task_id: taskId });
-    if (!result || !result.base64) {
-      throw new Error('未获取到文件数据');
+    const statusResult = await apiGet('export/status', { task_id: taskId });
+    const taskData = extractData(statusResult);
+    const fileSize = taskData.file_size || 0;
+    const filename = taskData.filename || '';
+    if (fileSize > 50 * 1024 * 1024) {
+      await bridge.download('export/download', { task_id: taskId }, filename);
+    } else {
+      const result = await apiGet('export/download_data', { task_id: taskId });
+      if (!result || !result.base64) {
+        throw new Error('未获取到文件数据');
+      }
+      const binaryStr = atob(result.base64);
+      const bytes = new Uint8Array(binaryStr.length);
+      for (let i = 0; i < binaryStr.length; i++) {
+        bytes[i] = binaryStr.charCodeAt(i);
+      }
+      const blob = new Blob([bytes], { type: result.mimetype || 'application/octet-stream' });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = result.filename || 'download.bin';
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      setTimeout(() => URL.revokeObjectURL(url), 1000);
     }
-    const binaryStr = atob(result.base64);
-    const bytes = new Uint8Array(binaryStr.length);
-    for (let i = 0; i < binaryStr.length; i++) {
-      bytes[i] = binaryStr.charCodeAt(i);
-    }
-    const blob = new Blob([bytes], { type: result.mimetype || 'application/octet-stream' });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.href = url;
-    a.download = result.filename || 'download.bin';
-    document.body.appendChild(a);
-    a.click();
-    a.remove();
-    setTimeout(() => URL.revokeObjectURL(url), 1000);
   } catch (e) {
     logError('download failed:', e);
     alert('下载失败: ' + (e.message || e));

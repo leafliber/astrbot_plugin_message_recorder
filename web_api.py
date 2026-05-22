@@ -25,6 +25,7 @@ from .time_utils import parse_time_range, normalize_timestamp
 
 MAX_IMPORT_FILE_SIZE = 4 * 1024 * 1024 * 1024
 MAX_EXPORT_FILE_AGE = 3600
+MAX_DOWNLOAD_DATA_SIZE = 50 * 1024 * 1024
 ALLOWED_IMPORT_EXTENSIONS = {".json", ".csv", ".mrpkg"}
 CHUNK_SIZE = 5 * 1024 * 1024
 CHUNK_SESSION_MAX_AGE = 3600
@@ -551,6 +552,9 @@ def register_all_web_apis(context, db: Database):
         filename = f"messages_export_{timestamp}.{ext}"
         mime_types = {"json": "application/json", "csv": "text/csv", "txt": "text/plain", "zip": "application/zip"}
         mimetype = mime_types.get(ext, "application/octet-stream")
+        file_size = os.path.getsize(file_path)
+        if file_size > MAX_DOWNLOAD_DATA_SIZE:
+            return jsonify({"success": False, "error": f"文件过大 ({file_size} bytes)，请使用流式下载"}), 400
         try:
             with open(file_path, "rb") as f:
                 file_data = f.read()
@@ -893,6 +897,11 @@ async def _execute_export_task(task_id: str, db: Database, query_filter: QueryFi
 
         task["status"] = "completed"
         task["file_path"] = str(file_path)
+        task["file_size"] = os.path.getsize(file_path)
+        format_type_val = format_type
+        ext = "zip" if format_type_val == "json" and options.get("include_media") else format_type_val
+        timestamp = time.strftime("%Y%m%d_%H%M%S", time.localtime())
+        task["filename"] = f"messages_export_{timestamp}.{ext}"
         task["completed_at"] = time.time()
         logger.info(f"[MessageRecorder Web] 导出任务 {task_id} 完成，共 {task.get('actual_count', 0)} 条记录")
     except asyncio.TimeoutError:
@@ -929,6 +938,8 @@ async def _export_json(task_id, db, query_filter, export_dir, include_chain, inc
             f.write("    ")
             f.write(json.dumps(msg_dict, ensure_ascii=False))
             count += 1
+            if count % 1000 == 0:
+                task["progress"] = f"已导出 {count} 条消息"
         f.write("\n  ]\n")
         f.write("}")
     with open(file_path, "r+", encoding="utf-8") as f:
@@ -950,6 +961,8 @@ async def _export_csv(task_id, db, query_filter, export_dir, task):
         async for msg in db.query_messages_batch(query_filter):
             writer.writerow([msg.id, msg.platform, msg.sender_id, msg.sender_name or "", msg.group_id or "", msg.channel_id or "", msg.message_type, msg.message_str or "", msg.reply_to_id or "", msg.timestamp, msg.created_at])
             count += 1
+            if count % 1000 == 0:
+                task["progress"] = f"已导出 {count} 条消息"
     task["actual_count"] = count
     return file_path
 
@@ -973,6 +986,8 @@ async def _export_txt(task_id, db, query_filter, export_dir, task):
             reply_info = f" ↩{msg.reply_to_id}" if msg.reply_to_id else ""
             f.write(f"[{time_str}] {platform_icon} {group_info} {sender}: {content}{reply_info}\n")
             count += 1
+            if count % 1000 == 0:
+                task["progress"] = f"已导出 {count} 条消息"
     with open(file_path, "r+", encoding="utf-8") as f:
         content = f.read()
         content = content.replace("总记录数: PENDING", f"总记录数: {count}")
@@ -986,7 +1001,7 @@ async def _export_txt(task_id, db, query_filter, export_dir, task):
 async def _export_with_media(task_id, db, query_filter, export_dir, include_chain, include_raw, task):
     media_base = Path(get_astrbot_plugin_data_path()) / PLUGIN_DIR_NAME / "media"
     temp_json_path = export_dir / f"{task_id}_temp.json"
-    media_files_collected: List[str] = []
+    media_files_collected: Dict[str, str] = {}
     count = 0
 
     with open(temp_json_path, "w", encoding="utf-8") as f:
@@ -1010,14 +1025,16 @@ async def _export_with_media(task_id, db, query_filter, export_dir, include_chai
                     for comp in chain:
                         if isinstance(comp, dict) and "local_path" in comp:
                             lp = comp["local_path"]
-                            if isinstance(lp, str) and lp:
-                                media_files_collected.append(lp)
+                            if isinstance(lp, str) and lp and lp not in media_files_collected:
+                                media_files_collected[lp] = f"media/{lp}"
             if not first:
                 f.write(",\n")
             first = False
             f.write("    ")
             f.write(json.dumps(msg_dict, ensure_ascii=False))
             count += 1
+            if count % 500 == 0:
+                task["progress"] = f"已处理 {count} 条消息"
         f.write("\n  ]\n")
         f.write("}")
 
@@ -1028,20 +1045,26 @@ async def _export_with_media(task_id, db, query_filter, export_dir, include_chai
         f.write(content)
         f.truncate()
 
+    task["progress"] = f"正在打包媒体文件 (共 {len(media_files_collected)} 个)..."
+
     pkg_path = export_dir / f"{task_id}.zip"
-    with zipfile.ZipFile(pkg_path, "w", zipfile.ZIP_DEFLATED) as zf:
+    with zipfile.ZipFile(pkg_path, "w", zipfile.ZIP_STORED) as zf:
         zf.write(temp_json_path, "data.json")
-        for rel_path in media_files_collected:
+        added = 0
+        for rel_path, zip_path in media_files_collected.items():
             abs_path = media_base / rel_path
             if abs_path.exists() and abs_path.is_file():
                 try:
-                    zf.write(abs_path, f"media/{rel_path}")
+                    zf.write(abs_path, zip_path)
+                    added += 1
+                    if added % 100 == 0:
+                        task["progress"] = f"已打包 {added}/{len(media_files_collected)} 个媒体文件"
                 except Exception as e:
                     logger.warning(f"[MessageRecorder Web] 打包媒体文件失败 {rel_path}: {e}")
 
     _safe_remove_file(str(temp_json_path))
     task["actual_count"] = count
-    task["media_count"] = len(media_files_collected)
+    task["media_count"] = added
     return pkg_path
 
 
