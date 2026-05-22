@@ -794,7 +794,7 @@ async function pollExportStatus(taskId) {
       const task = extractData(raw);
 
       if (task.status === 'completed') {
-        if (progressEl) progressEl.innerHTML = `<p>✅ 导出完成！共 ${task.actual_count || 0} 条记录</p><a href="#" id="downloadLink" class="btn btn-success">下载文件</a>`;
+        if (progressEl) progressEl.innerHTML = `<p>✅ 导出完成！共 ${task.actual_count || 0} 条记录</p><button id="downloadLink" class="btn btn-success">下载文件</button>`;
         document.getElementById('downloadLink')?.addEventListener('click', (e) => {
           e.preventDefault();
           downloadExportFile(taskId);
@@ -818,15 +818,32 @@ async function pollExportStatus(taskId) {
 }
 
 async function downloadExportFile(taskId) {
-  if (bridge && bridgeReady) {
-    try {
-      await bridge.download('export/download', { task_id: taskId });
-    } catch (e) {
-      logError('download failed:', e);
-      alert('下载失败: ' + (e.message || e));
-    }
-  } else {
+  if (!bridge || !bridgeReady) {
     alert('Bridge SDK 未就绪，无法下载');
+    return;
+  }
+  try {
+    const result = await apiGet('export/download_data', { task_id: taskId });
+    if (!result || !result.base64) {
+      throw new Error('未获取到文件数据');
+    }
+    const binaryStr = atob(result.base64);
+    const bytes = new Uint8Array(binaryStr.length);
+    for (let i = 0; i < binaryStr.length; i++) {
+      bytes[i] = binaryStr.charCodeAt(i);
+    }
+    const blob = new Blob([bytes], { type: result.mimetype || 'application/octet-stream' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = result.filename || 'download.bin';
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 1000);
+  } catch (e) {
+    logError('download failed:', e);
+    alert('下载失败: ' + (e.message || e));
   }
 }
 

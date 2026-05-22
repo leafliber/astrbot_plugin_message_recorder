@@ -12,6 +12,8 @@ from pathlib import Path
 from datetime import datetime
 from typing import Optional, Dict, Any, List
 
+import base64
+
 from quart import jsonify, request, send_file
 
 from astrbot.api import logger
@@ -523,6 +525,49 @@ def register_all_web_apis(context, db: Database):
         mimetype = mime_types.get(ext, "application/octet-stream")
         return await send_file(file_path, mimetype=mimetype, as_attachment=True, attachment_filename=filename)
 
+    async def api_export_download_data():
+        task_id = request.args.get("task_id")
+        if not task_id:
+            return jsonify({"success": False, "error": "缺少任务ID"})
+        task = _export_tasks.get(task_id)
+        if not task:
+            return jsonify({"success": False, "error": "任务不存在"})
+        if task["status"] != "completed":
+            return jsonify({"success": False, "error": "导出未完成"})
+        completed_at = task.get("completed_at", 0)
+        file_age = time.time() - completed_at
+        if file_age > MAX_EXPORT_FILE_AGE:
+            file_path = task.get("file_path")
+            if file_path and os.path.exists(file_path):
+                _safe_remove_file(file_path)
+            _export_tasks.pop(task_id, None)
+            return jsonify({"success": False, "error": "导出文件已过期，请重新导出"})
+        file_path = task.get("file_path")
+        if not file_path or not os.path.exists(file_path):
+            return jsonify({"success": False, "error": "文件不存在"})
+        format_type = task.get("format", "json")
+        ext = "zip" if format_type == "json" and task.get("options", {}).get("include_media") else format_type
+        timestamp = time.strftime("%Y%m%d_%H%M%S", time.localtime(completed_at))
+        filename = f"messages_export_{timestamp}.{ext}"
+        mime_types = {"json": "application/json", "csv": "text/csv", "txt": "text/plain", "zip": "application/zip"}
+        mimetype = mime_types.get(ext, "application/octet-stream")
+        try:
+            with open(file_path, "rb") as f:
+                file_data = f.read()
+            b64_data = base64.b64encode(file_data).decode("ascii")
+            return jsonify({
+                "success": True,
+                "data": {
+                    "filename": filename,
+                    "mimetype": mimetype,
+                    "base64": b64_data,
+                    "size": len(file_data),
+                },
+            })
+        except Exception as e:
+            logger.error(f"[MessageRecorder Web] 读取导出文件失败: {e}")
+            return jsonify({"success": False, "error": f"读取文件失败: {e}"})
+
     # ========== Import APIs ==========
 
     async def api_import_upload():
@@ -799,6 +844,7 @@ def register_all_web_apis(context, db: Database):
     context.register_web_api(f"{prefix}/export", api_export, ["POST"], "创建导出任务")
     context.register_web_api(f"{prefix}/export/status", api_export_status, ["GET"], "查询导出状态")
     context.register_web_api(f"{prefix}/export/download", api_export_download, ["GET"], "下载导出文件")
+    context.register_web_api(f"{prefix}/export/download_data", api_export_download_data, ["GET"], "获取导出文件数据(base64)")
     context.register_web_api(f"{prefix}/import/upload", api_import_upload, ["POST"], "简单文件导入")
     context.register_web_api(f"{prefix}/import/init", api_import_init, ["POST"], "初始化分片导入")
     context.register_web_api(f"{prefix}/import/chunk/<session_id>/<int:chunk_index>", api_import_chunk, ["POST"], "上传分片")
