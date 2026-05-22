@@ -258,6 +258,36 @@ class Database:
         """)
         if not await cursor.fetchone():
             try:
+                cursor = await self._db.execute("""
+                    SELECT platform, content_hash, COUNT(*) as cnt
+                    FROM messages
+                    WHERE content_hash IS NOT NULL
+                    GROUP BY platform, content_hash
+                    HAVING cnt > 1
+                """)
+                duplicates = await cursor.fetchall()
+                if duplicates:
+                    logger.warning(
+                        f"[MessageRecorder] 发现 {len(duplicates)} 组 content_hash 重复记录，将进行去重清理"
+                    )
+                    deduped = 0
+                    for platform, content_hash, cnt in duplicates:
+                        cursor = await self._db.execute("""
+                            DELETE FROM messages
+                            WHERE platform = ? AND content_hash = ?
+                            AND id NOT IN (
+                                SELECT id FROM messages
+                                WHERE platform = ? AND content_hash = ?
+                                ORDER BY timestamp DESC
+                                LIMIT 1
+                            )
+                        """, (platform, content_hash, platform, content_hash))
+                        deduped += cursor.rowcount
+                    if deduped > 0:
+                        logger.warning(
+                            f"[MessageRecorder] content_hash 去重清理了 {deduped} 条重复消息记录"
+                        )
+
                 await self._db.execute("""
                     CREATE UNIQUE INDEX IF NOT EXISTS idx_platform_content_hash_unique
                     ON messages(platform, content_hash)
