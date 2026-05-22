@@ -24,7 +24,6 @@ async def db_and_api(tmp_path):
         import aiosqlite
         database._db = await aiosqlite.connect(database.db_path)
         await database._db.execute("PRAGMA journal_mode=WAL")
-        database._current_schema = await database._detect_schema_version()
         await database._create_tables()
 
         api = MessageRecorderAPI(database)

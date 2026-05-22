@@ -3,9 +3,6 @@
 import asyncio
 import hashlib
 import io
-import json
-import os
-from datetime import datetime
 from pathlib import Path
 from typing import Optional, List
 
@@ -152,10 +149,10 @@ class MediaDownloader:
             if not filename:
                 filename = f"{content_hash}{ext}"
 
-            date_dir = self._get_date_dir(media_subdir)
-            date_dir.mkdir(parents=True, exist_ok=True)
+            hash_dir = self._get_hash_dir(media_subdir, content_hash)
+            hash_dir.mkdir(parents=True, exist_ok=True)
 
-            file_path = date_dir / filename
+            file_path = hash_dir / filename
 
             if file_path.exists():
                 rel_path = file_path.relative_to(self.media_base_path)
@@ -168,7 +165,9 @@ class MediaDownloader:
                 content = self._create_thumbnail(content)
                 content_hash = hashlib.sha256(content).hexdigest()[:16]
                 filename = f"{content_hash}{ext}"
-                file_path = date_dir / filename
+                hash_dir = self._get_hash_dir(media_subdir, content_hash)
+                hash_dir.mkdir(parents=True, exist_ok=True)
+                file_path = hash_dir / filename
 
                 if file_path.exists():
                     rel_path = file_path.relative_to(self.media_base_path)
@@ -204,9 +203,9 @@ class MediaDownloader:
             )
             return image_data
 
-    def _get_date_dir(self, media_subdir: str) -> Path:
-        date_str = datetime.now().strftime("%Y-%m")
-        return self.media_base_path / media_subdir / date_str
+    def _get_hash_dir(self, media_subdir: str, content_hash: str) -> Path:
+        prefix = content_hash[:2]
+        return self.media_base_path / media_subdir / prefix
 
     def _determine_extension(
         self, url: str, content_type: str, component_type: str
@@ -267,10 +266,10 @@ class MediaDownloader:
             type_dir = self.media_base_path / subdir
             if not type_dir.exists():
                 continue
-            for date_dir in type_dir.iterdir():
-                if not date_dir.is_dir():
+            for sub_dir in type_dir.iterdir():
+                if not sub_dir.is_dir():
                     continue
-                for file_path in date_dir.iterdir():
+                for file_path in sub_dir.iterdir():
                     if not file_path.is_file():
                         continue
                     try:

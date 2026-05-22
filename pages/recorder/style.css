@@ -12,6 +12,9 @@
   --card-bg: #ffffff;
   --shadow: 0 2px 10px rgba(0,0,0,0.1);
   --radius: 8px;
+  --skeleton-from: var(--bg-color);
+  --skeleton-via: #e8e9ed;
+  --skeleton-to: var(--bg-color);
 }
 
 * {
@@ -111,10 +114,21 @@ body {
 
 .view {
   display: none;
+  opacity: 0;
 }
 
 .view.active {
   display: block;
+  opacity: 1;
+}
+
+.view.fade-in {
+  animation: fadeIn 0.3s ease forwards;
+}
+
+@keyframes fadeIn {
+  from { opacity: 0; transform: translateY(6px); }
+  to { opacity: 1; transform: translateY(0); }
 }
 
 .card {
@@ -123,6 +137,12 @@ body {
   box-shadow: var(--shadow);
   padding: 1.5rem;
   margin-bottom: 1rem;
+  animation: cardAppear 0.3s ease both;
+}
+
+@keyframes cardAppear {
+  from { opacity: 0; transform: translateY(4px); }
+  to { opacity: 1; transform: translateY(0); }
 }
 
 .card-header {
@@ -147,13 +167,24 @@ body {
   box-shadow: var(--shadow);
   padding: 1.2rem;
   text-align: center;
+  animation: cardAppear 0.3s ease both;
 }
+
+.stat-card:nth-child(1) { animation-delay: 0ms; }
+.stat-card:nth-child(2) { animation-delay: 60ms; }
+.stat-card:nth-child(3) { animation-delay: 120ms; }
+.stat-card:nth-child(4) { animation-delay: 180ms; }
 
 .stat-value {
   font-size: 2rem;
   font-weight: 700;
   color: var(--primary-color);
   margin-bottom: 0.3rem;
+  min-height: 2.4rem;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: color 0.2s;
 }
 
 .stat-label {
@@ -198,6 +229,7 @@ body {
 .chart-box {
   width: 100%;
   height: 280px;
+  position: relative;
 }
 
 @media (max-width: 768px) {
@@ -383,6 +415,11 @@ body {
   color: var(--primary-color);
 }
 
+.btn-sm {
+  padding: 0.3rem 0.8rem;
+  font-size: 0.8rem;
+}
+
 .btn-success {
   background: var(--success-color);
 }
@@ -461,6 +498,12 @@ body {
   max-height: 80vh;
   overflow-y: auto;
   box-shadow: 0 10px 30px rgba(0,0,0,0.3);
+  animation: modalIn 0.2s ease;
+}
+
+@keyframes modalIn {
+  from { opacity: 0; transform: scale(0.95); }
+  to { opacity: 1; transform: scale(1); }
 }
 
 .modal-header {
@@ -515,27 +558,101 @@ body {
   border-left: 3px solid var(--primary-color);
 }
 
-.loading-overlay {
-  position: fixed;
-  top: 0;
-  left: 0;
-  right: 0;
-  bottom: 0;
-  background: rgba(255,255,255,0.8);
-  display: flex;
-  flex-direction: column;
-  justify-content: center;
-  align-items: center;
-  z-index: 300;
-}
-
-.loading-spinner {
-  width: 40px;
-  height: 40px;
-  border: 3px solid var(--border-color);
+.inline-spinner {
+  display: inline-block;
+  width: 18px;
+  height: 18px;
+  border: 2px solid var(--border-color);
   border-top-color: var(--primary-color);
   border-radius: 50%;
-  animation: spin 1s linear infinite;
+  animation: spin 0.8s linear infinite;
+  vertical-align: middle;
+  margin-right: 6px;
+}
+
+.skeleton {
+  background: linear-gradient(90deg, var(--skeleton-from) 25%, var(--skeleton-via) 50%, var(--skeleton-to) 75%);
+  background-size: 200% 100%;
+  animation: shimmer 1.5s ease-in-out infinite;
+  border-radius: var(--radius);
+}
+
+@keyframes shimmer {
+  0% { background-position: 200% 0; }
+  100% { background-position: -200% 0; }
+}
+
+.skeleton-inline {
+  display: inline-block;
+  border-radius: 4px;
+}
+
+.skeleton-stat {
+  height: 80px;
+  border-radius: var(--radius);
+}
+
+.skeleton-chart {
+  height: 280px;
+  border-radius: var(--radius);
+}
+
+.skeleton-line {
+  height: 16px;
+  margin-bottom: 10px;
+  border-radius: 4px;
+}
+
+.skeleton-line.short {
+  width: 60%;
+}
+
+.skeleton-card {
+  height: 80px;
+  margin-bottom: 12px;
+  border-radius: var(--radius);
+}
+
+.stat-value.loading {
+  color: transparent;
+}
+
+.chart-box.loading {
+  position: relative;
+}
+
+.section-loading {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 2rem;
+  color: var(--text-light);
+  font-size: 0.9rem;
+  gap: 0.5rem;
+}
+
+.section-error {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 1.5rem;
+  gap: 0.5rem;
+  color: var(--danger-color);
+  font-size: 0.9rem;
+  flex-wrap: wrap;
+}
+
+.error-icon {
+  font-size: 1rem;
+}
+
+.error-text {
+  color: var(--danger-color);
+}
+
+.error-text-sm {
+  color: var(--danger-color);
+  font-size: 0.85rem;
 }
 
 @keyframes spin {

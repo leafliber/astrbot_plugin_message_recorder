@@ -5,6 +5,14 @@ let pluginContext = null;
 
 const DEBUG = new URLSearchParams(window.location.search).has('debug');
 
+const viewDataLoaded = { dashboard: false, search: false, export: false };
+const dataCache = { platforms: null, stats: null };
+
+let echartsLoaded = false;
+let echartsLoading = false;
+
+let currentViewName = '';
+
 function log(...args) {
   if (DEBUG) console.log('[MessageRecorder]', ...args);
 }
@@ -62,86 +70,51 @@ function showInitError(message) {
   }
 }
 
-async function init() {
-  if (!bridge) {
-    logError('window.AstrBotPluginPage is not available');
-    showInitError('Bridge SDK 未加载 (window.AstrBotPluginPage 未定义)');
-    return;
-  }
-
-  try {
-    pluginContext = await bridge.ready();
-    bridgeReady = true;
-    log('Bridge ready, context:', pluginContext);
-  } catch (e) {
-    logError('bridge.ready() failed:', e);
-    showInitError(`Bridge 初始化失败: ${e.message || e}`);
-    return;
-  }
-
-  try {
-    initRouter();
-    initDashboard();
-    initSearch();
-    initExport();
-    initImport();
-    initModal();
-    initNavToggle();
-    navigateToDefault();
-  } catch (e) {
-    logError('init failed:', e);
-    showInitError(`初始化失败: ${e.message || e}`);
-  }
-}
-
-function initRouter() {
-  window.addEventListener('hashchange', handleHashChange);
-}
-
-function handleHashChange() {
-  const hash = window.location.hash.slice(1) || 'dashboard';
-  switchView(hash);
-}
-
-function navigateToDefault() {
-  const hash = window.location.hash.slice(1) || 'dashboard';
-  switchView(hash);
-}
-
-function switchView(viewName) {
-  document.querySelectorAll('.view').forEach(v => v.classList.remove('active'));
-  document.querySelectorAll('.nav-link').forEach(a => a.classList.remove('active'));
-
-  const view = document.getElementById(`view-${viewName}`);
-  if (view) {
-    view.classList.add('active');
-  } else {
-    document.getElementById('view-dashboard').classList.add('active');
-    viewName = 'dashboard';
-  }
-
-  const navLink = document.querySelector(`.nav-link[data-view="${viewName}"]`);
-  if (navLink) navLink.classList.add('active');
-
-  if (viewName === 'dashboard') loadDashboardData();
-  if (viewName === 'search') loadSearchData();
-  if (viewName === 'export') loadExportData();
-}
-
-function initNavToggle() {
-  document.getElementById('navToggle')?.addEventListener('click', () => {
-    document.getElementById('navLinks')?.classList.toggle('show');
+function loadEcharts() {
+  if (echartsLoaded) return Promise.resolve();
+  if (echartsLoading) return new Promise(resolve => {
+    const check = setInterval(() => {
+      if (echartsLoaded) { clearInterval(check); resolve(); }
+    }, 100);
+  });
+  echartsLoading = true;
+  return new Promise((resolve, reject) => {
+    const script = document.createElement('script');
+    script.src = 'https://cdn.jsdelivr.net/npm/echarts@5/dist/echarts.min.js';
+    script.onload = () => { echartsLoaded = true; echartsLoading = false; resolve(); };
+    script.onerror = () => { echartsLoading = false; reject(new Error('ECharts 加载失败')); };
+    document.head.appendChild(script);
   });
 }
 
-function showLoading() {
-  const el = document.getElementById('loadingOverlay');
-  if (el) el.style.display = 'flex';
+function showSkeletonSlot(el, type) {
+  if (!el) return;
+  el.classList.add('skeleton-slot');
+  let html = '';
+  if (type === 'stat-value') {
+    html = '<div class="skeleton skeleton-inline" style="width:60px;height:28px;"></div>';
+  } else if (type === 'chart') {
+    html = '<div class="skeleton skeleton-chart"></div>';
+  } else if (type === 'messages') {
+    html = Array.from({ length: 5 }, () => '<div class="skeleton skeleton-card"></div>').join('');
+  } else if (type === 'line') {
+    html = Array.from({ length: 3 }, () => '<div class="skeleton skeleton-line"></div>').join('');
+  }
+  el.innerHTML = html;
 }
 
-function hideLoading() {
-  const el = document.getElementById('loadingOverlay');
-  if (el) el.style.display = 'none';
+function clearSkeletonSlot(el) {
+  if (!el) return;
+  el.classList.remove('skeleton-slot');
+}
+
+function showSectionError(containerId, message, retryFn) {
+  const container = document.getElementById(containerId);
+  if (!container) return;
+  container.innerHTML = `<div class="section-error"><span class="error-icon">⚠️</span><span class="error-text">${escapeHtml(message)}</span>${retryFn ? '<button class="btn btn-outline btn-sm retry-btn">重试</button>' : ''}</div>`;
+  if (retryFn) {
+    container.querySelector('.retry-btn')?.addEventListener('click', retryFn);
+  }
 }
 
 function formatTime(timestamp) {
@@ -251,6 +224,89 @@ function formatTimestampStr(ts) {
   return `${y}-${m}-${d} ${h}:${min}:${s}`;
 }
 
+// ========== Init & Router ==========
+
+async function init() {
+  if (!bridge) {
+    logError('window.AstrBotPluginPage is not available');
+    showInitError('Bridge SDK 未加载 (window.AstrBotPluginPage 未定义)');
+    return;
+  }
+
+  try {
+    pluginContext = await bridge.ready();
+    bridgeReady = true;
+    log('Bridge ready, context:', pluginContext);
+  } catch (e) {
+    logError('bridge.ready() failed:', e);
+    showInitError(`Bridge 初始化失败: ${e.message || e}`);
+    return;
+  }
+
+  try {
+    initRouter();
+    initDashboard();
+    initSearch();
+    initExport();
+    initImport();
+    initModal();
+    initNavToggle();
+    navigateToDefault();
+  } catch (e) {
+    logError('init failed:', e);
+    showInitError(`初始化失败: ${e.message || e}`);
+  }
+}
+
+function initRouter() {
+  window.addEventListener('hashchange', handleHashChange);
+}
+
+function handleHashChange() {
+  const hash = window.location.hash.slice(1) || 'dashboard';
+  switchView(hash);
+}
+
+function navigateToDefault() {
+  const hash = window.location.hash.slice(1) || 'dashboard';
+  switchView(hash);
+}
+
+function switchView(viewName) {
+  if (currentViewName === viewName) return;
+  currentViewName = viewName;
+
+  document.querySelectorAll('.view').forEach(v => {
+    v.classList.remove('active', 'fade-in');
+  });
+  document.querySelectorAll('.nav-link').forEach(a => a.classList.remove('active'));
+
+  const view = document.getElementById(`view-${viewName}`);
+  if (view) {
+    view.classList.add('active');
+    requestAnimationFrame(() => view.classList.add('fade-in'));
+  } else {
+    const dashView = document.getElementById('view-dashboard');
+    dashView.classList.add('active');
+    requestAnimationFrame(() => dashView.classList.add('fade-in'));
+    viewName = 'dashboard';
+    currentViewName = 'dashboard';
+  }
+
+  const navLink = document.querySelector(`.nav-link[data-view="${viewName}"]`);
+  if (navLink) navLink.classList.add('active');
+
+  if (viewName === 'dashboard') loadDashboardData();
+  else if (viewName === 'search') loadSearchData();
+  else if (viewName === 'export') loadExportData();
+}
+
+function initNavToggle() {
+  document.getElementById('navToggle')?.addEventListener('click', () => {
+    document.getElementById('navLinks')?.classList.toggle('show');
+  });
+}
+
 // ========== Dashboard ==========
 
 let timelineChart = null;
@@ -258,8 +314,11 @@ let platformChart = null;
 let senderChart = null;
 let groupChart = null;
 let currentTimeRange = 'last30d';
+let dashboardLoading = false;
 
 function initDashboard() {
+  initDashboardSkeletons();
+
   document.querySelectorAll('.time-btn').forEach(btn => {
     btn.addEventListener('click', async () => {
       document.querySelectorAll('.time-btn').forEach(b => b.classList.remove('active'));
@@ -271,52 +330,135 @@ function initDashboard() {
   });
 }
 
-async function loadDashboardData() {
-  showLoading();
-  try {
-    const statsRaw = await apiGet('stats');
-    const stats = extractData(statsRaw);
-    updateStatsCards(stats);
-    updatePlatformChart(stats.platform_stats);
+function initDashboardSkeletons() {
+  document.querySelectorAll('.stat-value').forEach(el => {
+    if (el.textContent === '-') {
+      el.innerHTML = '<div class="skeleton skeleton-inline" style="width:60px;height:28px;"></div>';
+      el.classList.add('loading');
+    }
+  });
+  document.querySelectorAll('.chart-box').forEach(el => {
+    el.innerHTML = '<div class="skeleton skeleton-chart"></div>';
+    el.classList.add('loading');
+  });
+}
 
-    const timelineRaw = await apiGet('stats/timeline', { interval: 'day' });
-    const timelineData = extractData(timelineRaw);
-    updateTimelineChart(timelineData.points);
+function clearStatSkeleton(id) {
+  const el = document.getElementById(id);
+  if (el) {
+    el.classList.remove('loading');
+  }
+}
+
+function clearChartSkeleton(id) {
+  const el = document.getElementById(id);
+  if (el) {
+    el.classList.remove('loading');
+    el.innerHTML = '';
+  }
+}
+
+async function loadDashboardData(force = false) {
+  if (dashboardLoading) return;
+  if (viewDataLoaded.dashboard && !force) return;
+  dashboardLoading = true;
+
+  if (force) initDashboardSkeletons();
+
+  loadEcharts().catch(() => {});
+
+  loadPlatforms(false).catch(() => {});
+
+  try {
+    const [statsResult, timelineResult] = await Promise.all([
+      apiGet('stats').catch(e => { logError('stats failed:', e); return null; }),
+      apiGet('stats/timeline', { interval: 'day' }).catch(e => { logError('timeline failed:', e); return null; }),
+    ]);
+
+    if (statsResult) {
+      try {
+        const stats = extractData(statsResult);
+        dataCache.stats = stats;
+        updateStatsCards(stats);
+        if (echartsLoaded) {
+          clearChartSkeleton('platformChart');
+          updatePlatformChart(stats.platform_stats);
+        }
+      } catch (e) {
+        logError('Failed to process stats:', e);
+        document.querySelectorAll('.stat-value.loading').forEach(el => {
+          el.innerHTML = '<span class="error-text-sm">加载失败</span>';
+        });
+      }
+    } else {
+      document.querySelectorAll('.stat-value.loading').forEach(el => {
+        el.innerHTML = '<span class="error-text-sm">无数据</span>';
+      });
+    }
+
+    if (timelineResult) {
+      try {
+        const timelineData = extractData(timelineResult);
+        if (echartsLoaded) {
+          clearChartSkeleton('timelineChart');
+          updateTimelineChart(timelineData.points);
+        }
+      } catch (e) {
+        logError('Failed to process timeline:', e);
+        clearChartSkeleton('timelineChart');
+        showSectionError('timelineChart', '趋势图加载失败', () => loadDashboardData(true));
+      }
+    }
 
     updateTimeRangeDisplay(currentTimeRange);
     await loadRankingData();
+    viewDataLoaded.dashboard = true;
   } catch (e) {
     logError('Failed to load dashboard data:', e);
-    showMessageError(`加载数据失败: ${e.message || e}`);
   } finally {
-    hideLoading();
+    dashboardLoading = false;
   }
 }
 
 async function loadRankingData() {
-  try {
-    const senderRaw = await apiGet('stats/senders', { limit: 10, time: currentTimeRange });
-    const senderData = extractData(senderRaw);
-    updateSenderChart(senderData.senders);
-  } catch (e) {
-    logError('Failed to load sender ranking:', e);
+  const [senderResult, groupResult] = await Promise.all([
+    apiGet('stats/senders', { limit: 10, time: currentTimeRange }).catch(e => { logError('sender ranking failed:', e); return null; }),
+    apiGet('stats/groups', { limit: 10, time: currentTimeRange }).catch(e => { logError('group ranking failed:', e); return null; }),
+  ]);
+
+  if (!echartsLoaded) {
+    await loadEcharts().catch(() => {});
   }
 
-  try {
-    const groupRaw = await apiGet('stats/groups', { limit: 10, time: currentTimeRange });
-    const groupData = extractData(groupRaw);
-    updateGroupChart(groupData.groups);
-  } catch (e) {
-    logError('Failed to load group ranking:', e);
+  if (senderResult) {
+    try {
+      const senderData = extractData(senderResult);
+      clearChartSkeleton('senderChart');
+      updateSenderChart(senderData.senders);
+    } catch (e) {
+      logError('Failed to process sender ranking:', e);
+      clearChartSkeleton('senderChart');
+    }
+  }
+  if (groupResult) {
+    try {
+      const groupData = extractData(groupResult);
+      clearChartSkeleton('groupChart');
+      updateGroupChart(groupData.groups);
+    } catch (e) {
+      logError('Failed to process group ranking:', e);
+      clearChartSkeleton('groupChart');
+    }
   }
 }
 
 function updateStatsCards(stats) {
   const el = (id) => document.getElementById(id);
-  if (el('totalCount')) el('totalCount').textContent = formatNumber(stats.total_count);
-  if (el('groupCount')) el('groupCount').textContent = formatNumber(stats.group_message_count);
-  if (el('privateCount')) el('privateCount').textContent = formatNumber(stats.private_message_count);
-  if (el('platformCount')) el('platformCount').textContent = stats.platform_count;
+  const setVal = (id, val) => { const e = el(id); if (e) { e.textContent = val; e.classList.remove('loading'); } };
+  setVal('totalCount', formatNumber(stats.total_count));
+  setVal('groupCount', formatNumber(stats.group_message_count));
+  setVal('privateCount', formatNumber(stats.private_message_count));
+  setVal('platformCount', stats.platform_count);
 }
 
 function updateTimeRangeDisplay(timeRange) {
@@ -346,7 +488,7 @@ function initCharts() {
 }
 
 function updateTimelineChart(points) {
-  if (typeof echarts === 'undefined') return;
+  if (!echartsLoaded) return;
   initCharts();
   if (!timelineChart || !points?.length) return;
 
@@ -365,7 +507,7 @@ function updateTimelineChart(points) {
 }
 
 function updatePlatformChart(platformStats) {
-  if (typeof echarts === 'undefined') return;
+  if (!echartsLoaded) return;
   initCharts();
   if (!platformChart || !platformStats) return;
 
@@ -389,7 +531,7 @@ function updatePlatformChart(platformStats) {
 }
 
 function updateSenderChart(senders) {
-  if (typeof echarts === 'undefined') return;
+  if (!echartsLoaded) return;
   initCharts();
   if (!senderChart || !senders?.length) return;
 
@@ -403,7 +545,7 @@ function updateSenderChart(senders) {
 }
 
 function updateGroupChart(groups) {
-  if (typeof echarts === 'undefined') return;
+  if (!echartsLoaded) return;
   initCharts();
   if (!groupChart || !groups?.length) return;
 
@@ -421,6 +563,7 @@ function updateGroupChart(groups) {
 let searchFilters = { limit: 50, offset: 0, order: 'desc' };
 let totalMessages = 0;
 let advancedVisible = false;
+let searchLoading = false;
 
 function initSearch() {
   const keywordInput = document.getElementById('keywordInput');
@@ -474,32 +617,49 @@ function initSearch() {
   });
 }
 
-async function loadSearchData() {
-  await loadPlatforms();
+async function loadSearchData(force = false) {
+  if (viewDataLoaded.search && !force) return;
+
+  const listEl = document.getElementById('messageList');
+  if (listEl && !listEl.querySelector('.message-card')) {
+    listEl.innerHTML = Array.from({ length: 5 }, () => '<div class="skeleton skeleton-card"></div>').join('');
+  }
+
+  await loadPlatforms(force);
   await loadMessages();
+  viewDataLoaded.search = true;
 }
 
-async function loadPlatforms() {
+async function loadPlatforms(force = false) {
+  if (dataCache.platforms && !force) {
+    populatePlatformSelects(dataCache.platforms);
+    return;
+  }
   try {
     const raw = await apiGet('platforms');
     const data = extractData(raw);
-    const selects = ['platformFilter', 'exportPlatform'];
-    selects.forEach(id => {
-      const el = document.getElementById(id);
-      if (!el) return;
-      const currentVal = el.value;
-      el.innerHTML = '<option value="">全部平台</option>';
-      data.platforms.forEach(p => {
-        const opt = document.createElement('option');
-        opt.value = p;
-        opt.textContent = getPlatformIcon(p);
-        el.appendChild(opt);
-      });
-      el.value = currentVal;
-    });
+    dataCache.platforms = data;
+    populatePlatformSelects(data);
   } catch (e) {
     logError('Failed to load platforms:', e);
   }
+}
+
+function populatePlatformSelects(data) {
+  const selects = ['platformFilter', 'exportPlatform'];
+  selects.forEach(id => {
+    const el = document.getElementById(id);
+    if (!el) return;
+    const currentVal = el.value;
+    el.innerHTML = '<option value="">全部平台</option>';
+    data.platforms.forEach(p => {
+      const opt = document.createElement('option');
+      opt.value = p;
+      opt.textContent = getPlatformIcon(p);
+      el.appendChild(opt);
+    });
+    el.value = currentVal;
+  });
 }
 
 async function loadGroups(platform) {
@@ -539,7 +699,14 @@ async function loadSenders(platform) {
 }
 
 async function loadMessages() {
-  showLoading();
+  if (searchLoading) return;
+  searchLoading = true;
+
+  const listEl = document.getElementById('messageList');
+  if (listEl && !listEl.querySelector('.skeleton') && !listEl.querySelector('.message-card')) {
+    listEl.innerHTML = '<div class="section-loading"><span class="inline-spinner"></span>加载消息...</div>';
+  }
+
   try {
     const groupEl = document.getElementById('groupFilter');
     const senderEl = document.getElementById('senderFilter');
@@ -564,7 +731,7 @@ async function loadMessages() {
     logError('Failed to load messages:', e);
     showMessageError(e.message || String(e));
   } finally {
-    hideLoading();
+    searchLoading = false;
   }
 }
 
@@ -604,7 +771,8 @@ function renderMessages(messages) {
 
 function showMessageError(error) {
   const container = document.getElementById('messageList');
-  if (container) container.innerHTML = `<p class="text-center text-muted">加载失败: ${escapeHtml(error)}</p>`;
+  if (container) container.innerHTML = `<div class="section-error"><span class="error-icon">⚠️</span><span class="error-text">加载失败: ${escapeHtml(error)}</span><button class="btn btn-outline btn-sm retry-btn">重试</button></div>`;
+  container.querySelector('.retry-btn')?.addEventListener('click', () => loadMessages());
 }
 
 function renderPagination(pagination) {
@@ -652,11 +820,10 @@ function hideModal() {
 }
 
 async function showMessageDetail(messageId) {
-  showLoading();
+  showModal(`<div class="section-loading"><span class="inline-spinner"></span>加载消息详情...</div>`);
   try {
     const raw = await apiGet('message/detail', { id: messageId });
     const msg = extractData(raw);
-    hideLoading();
     showModal(`
       <div class="detail-section">
         <div class="detail-row"><span class="detail-label">时间:</span><span class="detail-value">${formatTime(msg.timestamp)}</span></div>
@@ -681,18 +848,17 @@ async function showMessageDetail(messageId) {
       </div>
     `);
   } catch (e) {
-    hideLoading();
     logError('Failed to load message detail:', e);
-    showModal(`<p class="text-muted">加载失败: ${escapeHtml(e.message || e)}</p>`);
+    showModal(`<div class="section-error"><span class="error-icon">⚠️</span><span class="error-text">加载失败: ${escapeHtml(e.message || e)}</span><button class="btn btn-outline btn-sm retry-btn">重试</button></div>`);
+    document.querySelector('#messageModal .retry-btn')?.addEventListener('click', () => showMessageDetail(messageId));
   }
 }
 
 async function showMessageContext(messageId) {
-  showLoading();
+  showModal(`<div class="section-loading"><span class="inline-spinner"></span>加载消息上下文...</div>`);
   try {
     const raw = await apiGet('message/context', { id: messageId, before: 5, after: 5 });
     const data = extractData(raw);
-    hideLoading();
     const allMsgs = [...(data.before || []), data.target, ...(data.after || [])].filter(Boolean);
     showModal(`
       <div class="detail-section">
@@ -709,9 +875,9 @@ async function showMessageContext(messageId) {
       </div>
     `);
   } catch (e) {
-    hideLoading();
     logError('Failed to load message context:', e);
-    showModal(`<p class="text-muted">加载失败: ${escapeHtml(e.message || e)}</p>`);
+    showModal(`<div class="section-error"><span class="error-icon">⚠️</span><span class="error-text">加载失败: ${escapeHtml(e.message || e)}</span><button class="btn btn-outline btn-sm retry-btn">重试</button></div>`);
+    document.querySelector('#messageModal .retry-btn')?.addEventListener('click', () => showMessageContext(messageId));
   }
 }
 
@@ -736,9 +902,11 @@ function initExport() {
   document.getElementById('startExport')?.addEventListener('click', startExport);
 }
 
-async function loadExportData() {
-  await loadPlatforms();
+async function loadExportData(force = false) {
+  if (viewDataLoaded.export && !force) return;
+  await loadPlatforms(force);
   displayExportFilters();
+  viewDataLoaded.export = true;
 }
 
 function displayExportFilters() {
@@ -785,7 +953,7 @@ async function pollExportStatus(taskId) {
   const progressEl = document.getElementById('exportProgress');
   if (progressEl) {
     progressEl.style.display = 'block';
-    progressEl.innerHTML = '<p>导出中，请稍候...</p>';
+    progressEl.innerHTML = '<p><span class="inline-spinner"></span>导出中，请稍候...</p>';
   }
 
   const poll = async () => {
@@ -803,16 +971,17 @@ async function pollExportStatus(taskId) {
         });
         document.getElementById('startExport').disabled = false;
       } else if (task.status === 'failed') {
-        if (progressEl) progressEl.innerHTML = `<p class="text-muted">❌ 导出失败: ${escapeHtml(task.error)}</p>`;
+        if (progressEl) progressEl.innerHTML = `<div class="section-error"><span class="error-icon">❌</span><span class="error-text">导出失败: ${escapeHtml(task.error)}</span></div>`;
         document.getElementById('startExport').disabled = false;
       } else {
         const progressInfo = task.progress ? ` - ${escapeHtml(task.progress)}` : '';
-        if (progressEl) progressEl.innerHTML = `<p>导出中... (状态: ${task.status})${progressInfo}</p>`;
+        if (progressEl) progressEl.innerHTML = `<p><span class="inline-spinner"></span>导出中...${progressInfo}</p>`;
         setTimeout(poll, 2000);
       }
     } catch (e) {
       logError('Poll export status failed:', e);
-      if (progressEl) progressEl.innerHTML = `<p class="text-muted">查询状态失败: ${escapeHtml(e.message || e)}</p>`;
+      if (progressEl) progressEl.innerHTML = `<div class="section-error"><span class="error-icon">⚠️</span><span class="error-text">查询状态失败: ${escapeHtml(e.message || e)}</span><button class="btn btn-outline btn-sm retry-btn">重试</button></div>`;
+      progressEl.querySelector('.retry-btn')?.addEventListener('click', () => pollExportStatus(taskId));
       document.getElementById('startExport').disabled = false;
     }
   };
@@ -832,11 +1001,11 @@ async function downloadExportFile(taskId) {
     const fileSize = taskData.file_size || 0;
     const filename = taskData.filename || '';
     if (fileSize > 50 * 1024 * 1024) {
-      if (progressEl) progressEl.innerHTML = `<p>正在下载 ${formatFileSize(fileSize)}，请勿关闭页面...</p>`;
+      if (progressEl) progressEl.innerHTML = `<p><span class="inline-spinner"></span>正在下载 ${formatFileSize(fileSize)}，请勿关闭页面...</p>`;
       await bridge.download('export/download', { task_id: taskId }, filename);
       if (progressEl) progressEl.innerHTML = `<p>✅ 下载已开始，请查看浏览器下载栏</p>`;
     } else {
-      if (progressEl) progressEl.innerHTML = `<p>正在准备下载...</p>`;
+      if (progressEl) progressEl.innerHTML = `<p><span class="inline-spinner"></span>正在准备下载...</p>`;
       const result = await apiGet('export/download_data', { task_id: taskId });
       if (!result || !result.base64) {
         throw new Error('未获取到文件数据');
@@ -859,7 +1028,8 @@ async function downloadExportFile(taskId) {
     }
   } catch (e) {
     logError('download failed:', e);
-    if (progressEl) progressEl.innerHTML = `<p class="text-muted">❌ 下载失败: ${escapeHtml(e.message || e)}</p>`;
+    if (progressEl) progressEl.innerHTML = `<div class="section-error"><span class="error-icon">❌</span><span class="error-text">下载失败: ${escapeHtml(e.message || e)}</span><button class="btn btn-outline btn-sm retry-btn">重试</button></div>`;
+    progressEl.querySelector('.retry-btn')?.addEventListener('click', () => downloadExportFile(taskId));
   }
 }
 
@@ -910,7 +1080,7 @@ async function startImport() {
   const progressEl = document.getElementById('importProgress');
   if (progressEl) {
     progressEl.style.display = 'block';
-    progressEl.innerHTML = '<p>导入中，请稍候...</p>';
+    progressEl.innerHTML = '<p><span class="inline-spinner"></span>导入中，请稍候...</p>';
   }
   document.getElementById('startImport').disabled = true;
 
@@ -922,7 +1092,7 @@ async function startImport() {
     }
   } catch (e) {
     logError('import failed:', e);
-    if (progressEl) progressEl.innerHTML = `<p class="text-muted">❌ 导入失败: ${escapeHtml(e.message || e)}</p>`;
+    if (progressEl) progressEl.innerHTML = `<div class="section-error"><span class="error-icon">❌</span><span class="error-text">导入失败: ${escapeHtml(e.message || e)}</span><button class="btn btn-outline btn-sm retry-btn">重试</button></div>`;
     document.getElementById('startImport').disabled = false;
   }
 }
@@ -935,7 +1105,7 @@ async function simpleImport(file, mode, progressEl) {
   const result = await bridge.upload('import/upload', file);
   log('simple import result:', result);
 
-  if (progressEl) progressEl.innerHTML = '<p>文件上传完成，处理中...</p>';
+  if (progressEl) progressEl.innerHTML = '<p><span class="inline-spinner"></span>文件上传完成，处理中...</p>';
 
   const data = extractData(result);
   const taskId = data?.task_id;
@@ -960,7 +1130,7 @@ async function chunkedImport(file, mode, progressEl) {
   const initData = extractData(initRaw);
   const { session_id, total_chunks, chunk_size } = initData;
 
-  if (progressEl) progressEl.innerHTML = `<p>分片上传中 (0/${total_chunks})...</p>`;
+  if (progressEl) progressEl.innerHTML = `<p><span class="inline-spinner"></span>分片上传中 (0/${total_chunks})...</p>`;
 
   for (let i = 0; i < total_chunks; i++) {
     const start = i * chunk_size;
@@ -970,7 +1140,7 @@ async function chunkedImport(file, mode, progressEl) {
     await bridge.upload(`import/chunk/${session_id}/${i}`, chunk);
     log(`chunk ${i} uploaded`);
 
-    if (progressEl) progressEl.innerHTML = `<p>分片上传中 (${i + 1}/${total_chunks})...</p>`;
+    if (progressEl) progressEl.innerHTML = `<p><span class="inline-spinner"></span>分片上传中 (${i + 1}/${total_chunks})...</p>`;
   }
 
   const completeRaw = await apiPost('import/complete', { session_id });
@@ -994,17 +1164,18 @@ async function pollImportStatus(taskId, progressEl) {
         if (progressEl) progressEl.innerHTML = `<p>✅ 导入完成！共导入 ${task.imported || 0} 条，跳过 ${task.skipped || 0} 条</p>`;
         document.getElementById('startImport').disabled = false;
       } else if (task.status === 'failed') {
-        if (progressEl) progressEl.innerHTML = `<p class="text-muted">❌ 导入失败: ${escapeHtml(task.error)}</p>`;
+        if (progressEl) progressEl.innerHTML = `<div class="section-error"><span class="error-icon">❌</span><span class="error-text">导入失败: ${escapeHtml(task.error)}</span></div>`;
         document.getElementById('startImport').disabled = false;
       } else {
         const processed = task.processed || 0;
         const total = task.total_records || '?';
-        if (progressEl) progressEl.innerHTML = `<p>导入中... (${processed}/${total})</p>`;
+        if (progressEl) progressEl.innerHTML = `<p><span class="inline-spinner"></span>导入中... (${processed}/${total})</p>`;
         setTimeout(poll, 2000);
       }
     } catch (e) {
       logError('Poll import status failed:', e);
-      if (progressEl) progressEl.innerHTML = `<p class="text-muted">查询状态失败: ${escapeHtml(e.message || e)}</p>`;
+      if (progressEl) progressEl.innerHTML = `<div class="section-error"><span class="error-icon">⚠️</span><span class="error-text">查询状态失败: ${escapeHtml(e.message || e)}</span><button class="btn btn-outline btn-sm retry-btn">重试</button></div>`;
+      progressEl.querySelector('.retry-btn')?.addEventListener('click', () => pollImportStatus(taskId, progressEl));
       document.getElementById('startImport').disabled = false;
     }
   };

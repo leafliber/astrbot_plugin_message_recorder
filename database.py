@@ -10,7 +10,7 @@ from typing import Optional, List, Dict, Any
 from astrbot.core.utils.astrbot_path import get_astrbot_plugin_data_path
 from astrbot.api import logger
 
-from .models import MessageRecord, QueryFilter, MessageStats, SCHEMA_VERSION
+from .models import MessageRecord, QueryFilter, MessageStats
 from .time_utils import parse_time_range
 from .serializer import compute_content_hash, extract_media_paths
 
@@ -52,8 +52,6 @@ class Database:
         self.db_path: Optional[Path] = None
         self._db: Optional[aiosqlite.Connection] = None
         self._write_lock = asyncio.Lock()
-        self._current_schema: int = 0
-
     async def init(self) -> None:
         """初始化数据库"""
         data_path = Path(get_astrbot_plugin_data_path())
@@ -63,9 +61,8 @@ class Database:
 
         self._db = await aiosqlite.connect(self.db_path)
         await self._db.execute("PRAGMA journal_mode=WAL")
-        self._current_schema = await self._detect_schema_version()
         await self._create_tables()
-        logger.info(f"[MessageRecorder] 数据库初始化完成: {self.db_path} (schema v{self._current_schema})")
+        logger.info(f"[MessageRecorder] 数据库初始化完成: {self.db_path}")
 
     async def close(self) -> None:
         """关闭数据库连接"""
@@ -75,124 +72,32 @@ class Database:
                 self._db = None
             logger.info("[MessageRecorder] 数据库连接已关闭")
 
-    async def _detect_schema_version(self) -> int:
-        """检测当前数据库的 schema 版本"""
-        if not self._db:
-            return 0
-        try:
-            cursor = await self._db.execute("""
-                SELECT name FROM sqlite_master
-                WHERE type='table' AND name='schema_version'
-            """)
-            if await cursor.fetchone():
-                cursor = await self._db.execute(
-                    "SELECT MAX(version) FROM schema_version"
-                )
-                row = await cursor.fetchone()
-                return row[0] if row and row[0] else 0
-
-            cursor = await self._db.execute("""
-                SELECT name FROM sqlite_master
-                WHERE type='table' AND name='messages'
-            """)
-            if await cursor.fetchone():
-                return 1
-
-            return 0
-        except Exception:
-            return 0
-
     async def _create_tables(self) -> None:
-        """创建数据表和索引，执行迁移"""
+        """创建数据表和索引"""
         async with self._write_lock:
-            if self._current_schema < 2:
-                await self._migrate_v1_to_v2()
-
+            await self._db.execute("""
+                CREATE TABLE IF NOT EXISTS messages (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    platform TEXT NOT NULL,
+                    message_id TEXT,
+                    session_id TEXT,
+                    group_id TEXT,
+                    channel_id TEXT,
+                    sender_id TEXT NOT NULL,
+                    sender_name TEXT,
+                    message_type TEXT NOT NULL,
+                    message_str TEXT,
+                    message_chain TEXT,
+                    raw_message TEXT,
+                    reply_to_id TEXT,
+                    content_hash TEXT,
+                    timestamp INTEGER NOT NULL,
+                    created_at INTEGER NOT NULL
+                )
+            """)
             await self._ensure_indexes()
             await self._ensure_fts()
             await self._db.commit()
-
-    async def _migrate_v1_to_v2(self) -> None:
-        """从 v1 迁移到 v2：添加新字段、schema_version 表、content_hash"""
-        logger.info("[MessageRecorder] 开始数据库迁移 v1 → v2")
-
-        await self._db.execute("""
-            CREATE TABLE IF NOT EXISTS messages (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                platform TEXT NOT NULL,
-                message_id TEXT,
-                session_id TEXT,
-                group_id TEXT,
-                channel_id TEXT,
-                sender_id TEXT NOT NULL,
-                sender_name TEXT,
-                message_type TEXT NOT NULL,
-                message_str TEXT,
-                message_chain TEXT,
-                raw_message TEXT,
-                reply_to_id TEXT,
-                content_hash TEXT,
-                timestamp INTEGER NOT NULL,
-                created_at INTEGER NOT NULL
-            )
-        """)
-
-        if self._current_schema == 1:
-            await self._add_column_if_not_exists("messages", "channel_id", "TEXT")
-            await self._add_column_if_not_exists("messages", "reply_to_id", "TEXT")
-            await self._add_column_if_not_exists("messages", "content_hash", "TEXT")
-
-            try:
-                cursor = await self._db.execute("""
-                    SELECT id, platform, session_id, sender_id, message_str, timestamp
-                    FROM messages WHERE content_hash IS NULL
-                """)
-                rows = await cursor.fetchall()
-                updated = 0
-                for row in rows:
-                    rec_id, platform, session_id, sender_id, message_str, ts = row
-                    ch = compute_content_hash(
-                        platform or "", session_id or "", sender_id or "",
-                        message_str, ts
-                    )
-                    await self._db.execute(
-                        "UPDATE messages SET content_hash = ? WHERE id = ?",
-                        (ch, rec_id),
-                    )
-                    updated += 1
-                if updated > 0:
-                    logger.info(
-                        f"[MessageRecorder] 已为 {updated} 条记录计算 content_hash"
-                    )
-            except Exception as e:
-                logger.warning(f"[MessageRecorder] 计算 content_hash 失败: {e}")
-
-        await self._db.execute("""
-            CREATE TABLE IF NOT EXISTS schema_version (
-                version INTEGER NOT NULL,
-                applied_at INTEGER NOT NULL,
-                description TEXT
-            )
-        """)
-        await self._db.execute(
-            "INSERT INTO schema_version (version, applied_at, description) VALUES (?, ?, ?)",
-            (SCHEMA_VERSION, int(time.time() * 1000), "v2: add channel_id, reply_to_id, content_hash"),
-        )
-
-        self._current_schema = SCHEMA_VERSION
-        logger.info("[MessageRecorder] 数据库迁移 v1 → v2 完成")
-
-    async def _add_column_if_not_exists(
-        self, table: str, column: str, col_type: str
-    ) -> None:
-        """安全添加列（如果不存在）"""
-        cursor = await self._db.execute(f"PRAGMA table_info({table})")
-        existing_columns = {row[1] for row in await cursor.fetchall()}
-        if column not in existing_columns:
-            await self._db.execute(
-                f"ALTER TABLE {table} ADD COLUMN {column} {col_type}"
-            )
-            logger.info(f"[MessageRecorder] 已添加列: {table}.{column}")
 
     async def _ensure_indexes(self) -> None:
         """确保所有索引存在"""
@@ -205,98 +110,15 @@ class Database:
             "CREATE INDEX IF NOT EXISTS idx_channel_id ON messages(channel_id)",
             "CREATE INDEX IF NOT EXISTS idx_content_hash ON messages(content_hash)",
             "CREATE INDEX IF NOT EXISTS idx_reply_to_id ON messages(reply_to_id)",
+            """CREATE UNIQUE INDEX IF NOT EXISTS idx_platform_message_id_unique
+               ON messages(platform, message_id)
+               WHERE message_id IS NOT NULL AND message_id != ''""",
+            """CREATE UNIQUE INDEX IF NOT EXISTS idx_platform_content_hash_unique
+               ON messages(platform, content_hash)
+               WHERE content_hash IS NOT NULL""",
         ]
         for index_sql in indexes:
             await self._db.execute(index_sql)
-
-        cursor = await self._db.execute("""
-            SELECT name FROM sqlite_master
-            WHERE type='index' AND name='idx_platform_message_id_unique'
-        """)
-        if not await cursor.fetchone():
-            try:
-                cursor = await self._db.execute("""
-                    SELECT platform, message_id, COUNT(*) as cnt
-                    FROM messages
-                    WHERE message_id IS NOT NULL AND message_id != ''
-                    GROUP BY platform, message_id
-                    HAVING cnt > 1
-                """)
-                duplicates = await cursor.fetchall()
-                if duplicates:
-                    deduped = 0
-                    for platform, message_id, cnt in duplicates:
-                        cursor = await self._db.execute("""
-                            DELETE FROM messages
-                            WHERE platform = ? AND message_id = ?
-                            AND id NOT IN (
-                                SELECT id FROM messages
-                                WHERE platform = ? AND message_id = ?
-                                ORDER BY timestamp DESC
-                                LIMIT 1
-                            )
-                        """, (platform, message_id, platform, message_id))
-                        deduped += cursor.rowcount
-                    if deduped > 0:
-                        logger.info(
-                            f"[MessageRecorder] 去重清理了 {deduped} 条重复消息记录"
-                        )
-
-                await self._db.execute("""
-                    CREATE UNIQUE INDEX IF NOT EXISTS idx_platform_message_id_unique
-                    ON messages(platform, message_id)
-                    WHERE message_id IS NOT NULL AND message_id != ''
-                """)
-            except Exception as e:
-                logger.warning(
-                    f"[MessageRecorder] 添加唯一约束失败: {e}"
-                )
-
-        cursor = await self._db.execute("""
-            SELECT name FROM sqlite_master
-            WHERE type='index' AND name='idx_platform_content_hash_unique'
-        """)
-        if not await cursor.fetchone():
-            try:
-                cursor = await self._db.execute("""
-                    SELECT platform, content_hash, COUNT(*) as cnt
-                    FROM messages
-                    WHERE content_hash IS NOT NULL
-                    GROUP BY platform, content_hash
-                    HAVING cnt > 1
-                """)
-                duplicates = await cursor.fetchall()
-                if duplicates:
-                    logger.warning(
-                        f"[MessageRecorder] 发现 {len(duplicates)} 组 content_hash 重复记录，将进行去重清理"
-                    )
-                    deduped = 0
-                    for platform, content_hash, cnt in duplicates:
-                        cursor = await self._db.execute("""
-                            DELETE FROM messages
-                            WHERE platform = ? AND content_hash = ?
-                            AND id NOT IN (
-                                SELECT id FROM messages
-                                WHERE platform = ? AND content_hash = ?
-                                ORDER BY timestamp DESC
-                                LIMIT 1
-                            )
-                        """, (platform, content_hash, platform, content_hash))
-                        deduped += cursor.rowcount
-                    if deduped > 0:
-                        logger.warning(
-                            f"[MessageRecorder] content_hash 去重清理了 {deduped} 条重复消息记录"
-                        )
-
-                await self._db.execute("""
-                    CREATE UNIQUE INDEX IF NOT EXISTS idx_platform_content_hash_unique
-                    ON messages(platform, content_hash)
-                    WHERE content_hash IS NOT NULL
-                """)
-            except Exception as e:
-                logger.warning(
-                    f"[MessageRecorder] 添加 content_hash 唯一约束失败: {e}"
-                )
 
     async def _ensure_fts(self) -> None:
         """确保 FTS5 全文搜索索引存在"""

@@ -11,7 +11,7 @@ import pytest
 import aiosqlite
 
 from astrbot_plugin_message_recorder.database import Database, _row_to_record
-from astrbot_plugin_message_recorder.models import MessageRecord, QueryFilter, SCHEMA_VERSION
+from astrbot_plugin_message_recorder.models import MessageRecord, QueryFilter
 from astrbot_plugin_message_recorder.serializer import compute_content_hash
 
 
@@ -30,7 +30,6 @@ async def db(tmp_db_path):
         database.db_path = tmp_db_path
         database._db = await aiosqlite.connect(tmp_db_path)
         await database._db.execute("PRAGMA journal_mode=WAL")
-        database._current_schema = await database._detect_schema_version()
         await database._create_tables()
         yield database
         await database.close()
@@ -64,19 +63,6 @@ class TestDatabaseInit:
             "SELECT name FROM sqlite_master WHERE type='table' AND name='messages'"
         )
         assert await cursor.fetchone() is not None
-
-    @pytest.mark.asyncio
-    async def test_schema_version_table(self, db):
-        cursor = await db._db.execute(
-            "SELECT name FROM sqlite_master WHERE type='table' AND name='schema_version'"
-        )
-        assert await cursor.fetchone() is not None
-
-    @pytest.mark.asyncio
-    async def test_schema_version_value(self, db):
-        cursor = await db._db.execute("SELECT MAX(version) FROM schema_version")
-        row = await cursor.fetchone()
-        assert row[0] == SCHEMA_VERSION
 
     @pytest.mark.asyncio
     async def test_fts_table_exists(self, db):
@@ -457,53 +443,3 @@ class TestMediaPaths:
         assert len(paths) >= 1
 
 
-class TestMigration:
-    @pytest.mark.asyncio
-    async def test_v1_to_v2_migration(self, tmp_path):
-        db_path = tmp_path / "migration_test.db"
-        conn = await aiosqlite.connect(db_path)
-        await conn.execute("PRAGMA journal_mode=WAL")
-
-        await conn.execute("""
-            CREATE TABLE messages (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                platform TEXT NOT NULL,
-                message_id TEXT,
-                session_id TEXT,
-                group_id TEXT,
-                sender_id TEXT NOT NULL,
-                sender_name TEXT,
-                message_type TEXT NOT NULL,
-                message_str TEXT,
-                message_chain TEXT,
-                raw_message TEXT,
-                timestamp INTEGER NOT NULL,
-                created_at INTEGER NOT NULL
-            )
-        """)
-        await conn.execute(
-            "INSERT INTO messages (platform, message_id, session_id, group_id, sender_id, sender_name, message_type, message_str, timestamp, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-            ("telegram", "old_001", "sess", "grp", "user1", "Alice", "group", "hello", 1700000000000, 1700000000000),
-        )
-        await conn.commit()
-        await conn.close()
-
-        with patch(
-            "astrbot_plugin_message_recorder.database.get_astrbot_plugin_data_path",
-            return_value=str(tmp_path.parent),
-        ):
-            database = Database("test_plugin")
-            database.db_path = db_path
-            database._db = await aiosqlite.connect(db_path)
-            await database._db.execute("PRAGMA journal_mode=WAL")
-            database._current_schema = await database._detect_schema_version()
-            assert database._current_schema == 1
-
-            await database._create_tables()
-            assert database._current_schema == SCHEMA_VERSION
-
-            cursor = await database._db.execute("SELECT content_hash FROM messages WHERE id = 1")
-            row = await cursor.fetchone()
-            assert row[0] is not None
-
-            await database.close()
