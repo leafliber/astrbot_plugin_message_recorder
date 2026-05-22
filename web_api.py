@@ -597,7 +597,7 @@ def register_all_web_apis(context, db: Database):
             task_id = f"import_{uuid.uuid4().hex[:12]}"
             temp_file = temp_dir / f"{task_id}{file_ext}"
             temp_file.write_bytes(content)
-            mode = request.form.get("mode", "skip_duplicates")
+            mode = request.form.get("mode") or request.args.get("mode", "skip_duplicates")
             _import_tasks[task_id] = {
                 "status": "pending",
                 "mode": mode,
@@ -676,9 +676,9 @@ def register_all_web_apis(context, db: Database):
             return jsonify({"success": False, "error": "分片索引无效"})
         try:
             files = await request.files
-            if not files or "chunk" not in files:
+            if not files or "file" not in files:
                 return jsonify({"success": False, "error": "未上传分片"})
-            chunk_file = files["chunk"]
+            chunk_file = files["file"]
             chunk_data = chunk_file.read()
             chunk_path = Path(session["chunks_dir"]) / f"{chunk_index:06d}"
             chunk_path.write_bytes(chunk_data)

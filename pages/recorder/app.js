@@ -1102,7 +1102,7 @@ async function simpleImport(file, mode, progressEl) {
     throw new Error('Bridge SDK 未就绪');
   }
 
-  const result = await bridge.upload('import/upload', file);
+  const result = await bridge.upload(`import/upload?mode=${encodeURIComponent(mode)}`, file);
   log('simple import result:', result);
 
   if (progressEl) progressEl.innerHTML = '<p><span class="inline-spinner"></span>文件上传完成，处理中...</p>';
@@ -1137,7 +1137,10 @@ async function chunkedImport(file, mode, progressEl) {
     const end = Math.min(start + chunk_size, file.size);
     const chunk = file.slice(start, end);
 
-    await bridge.upload(`import/chunk/${session_id}/${i}`, chunk);
+    const chunkResult = await bridge.upload(`import/chunk/${session_id}/${i}`, chunk);
+    if (chunkResult && typeof chunkResult === 'object' && chunkResult.success === false) {
+      throw new Error(chunkResult.error || `分片 ${i + 1} 上传失败`);
+    }
     log(`chunk ${i} uploaded`);
 
     if (progressEl) progressEl.innerHTML = `<p><span class="inline-spinner"></span>分片上传中 (${i + 1}/${total_chunks})...</p>`;
