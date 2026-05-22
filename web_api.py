@@ -524,7 +524,9 @@ def register_all_web_apis(context, db: Database):
         filename = f"messages_export_{timestamp}.{ext}"
         mime_types = {"json": "application/json", "csv": "text/csv", "txt": "text/plain", "zip": "application/zip"}
         mimetype = mime_types.get(ext, "application/octet-stream")
-        return await send_file(file_path, mimetype=mimetype, as_attachment=True, attachment_filename=filename)
+        response = await send_file(file_path, mimetype=mimetype, as_attachment=True, attachment_filename=filename)
+        response.timeout = None
+        return response
 
     async def api_export_download_data():
         task_id = request.args.get("task_id")

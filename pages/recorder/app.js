@@ -825,14 +825,18 @@ async function downloadExportFile(taskId) {
     alert('Bridge SDK 未就绪，无法下载');
     return;
   }
+  const progressEl = document.getElementById('exportProgress');
   try {
     const statusResult = await apiGet('export/status', { task_id: taskId });
     const taskData = extractData(statusResult);
     const fileSize = taskData.file_size || 0;
     const filename = taskData.filename || '';
     if (fileSize > 50 * 1024 * 1024) {
+      if (progressEl) progressEl.innerHTML = `<p>正在下载 ${formatFileSize(fileSize)}，请勿关闭页面...</p>`;
       await bridge.download('export/download', { task_id: taskId }, filename);
+      if (progressEl) progressEl.innerHTML = `<p>✅ 下载已开始，请查看浏览器下载栏</p>`;
     } else {
+      if (progressEl) progressEl.innerHTML = `<p>正在准备下载...</p>`;
       const result = await apiGet('export/download_data', { task_id: taskId });
       if (!result || !result.base64) {
         throw new Error('未获取到文件数据');
@@ -851,10 +855,11 @@ async function downloadExportFile(taskId) {
       a.click();
       a.remove();
       setTimeout(() => URL.revokeObjectURL(url), 1000);
+      if (progressEl) progressEl.innerHTML = `<p>✅ 下载已开始</p>`;
     }
   } catch (e) {
     logError('download failed:', e);
-    alert('下载失败: ' + (e.message || e));
+    if (progressEl) progressEl.innerHTML = `<p class="text-muted">❌ 下载失败: ${escapeHtml(e.message || e)}</p>`;
   }
 }
 
