@@ -17,34 +17,33 @@
 ## ✨ 功能特色
 
 - 🔥 **全平台支持** - 支持 Telegram、Discord、QQ 官方/私有、微信等所有 AstrBot 接入的平台
-- 💾 **SQLite 存储** - 轻量级本地数据库，无需额外配置，开箱即用
-- 📊 **完整记录** - 保存消息文本、发送者、群组、时间戳、消息链等完整信息
-- 🖼️ **多媒体保存** - 可选保存图片、语音、视频、文件到本地，支持原图/缩略图模式
-- 🌐 **Web 管理面板** - 可视化仪表盘、消息搜索、数据导出/导入功能
-- 🔍 **丰富查询** - 支持按发送者、群组、时间范围、关键词等多维度查询
-- 🔌 **API 接口** - 提供完整 API 供其他插件调用，轻松获取历史消息
-- 🧹 **自动清理** - 可配置保留天数和最大记录数，自动清理过期数据
-- ⚡ **异步高效** - 使用 aiosqlite 异步操作，不影响消息处理性能
+- 💾 **SQLite 存储** - 轻量级本地数据库，WAL 模式，开箱即用
+- 📊 **完整记录** - 保存消息文本、发送者、群组/频道、时间戳、消息链、回复关系等完整信息
+- 🖼️ **多媒体保存** - 可选保存图片、语音、视频、文件到本地，支持原图/缩略图模式，内容哈希自动去重
+- 🌐 **Web 管理面板** - 基于 AstrBot Plugin Pages 的可视化面板，骨架屏渐进式加载，内嵌于 Dashboard
+- 🔍 **多维查询** - 支持按平台、发送者、群组、频道、时间范围、关键词、回复关系等多维度组合查询
+- 📤 **数据导入导出** - 支持 JSON/CSV/MRPKG 格式导出，大文件分片上传导入，含媒体文件打包
+- 🔌 **API 接口** - 提供完整 API 供其他插件调用，支持分页、统计、上下文查询
+- 🧹 **自动清理** - 可配置保留天数和最大记录数，自动清理过期数据和孤立媒体文件
+- ⚡ **异步高效** - 使用 aiosqlite 异步操作，并发下载控制，不影响消息处理性能
 
 ---
 
 ## 📦 安装
 
-### 方式一：直接下载
-
-1. 将本仓库克隆或下载到 AstrBot 的插件目录：
-   ```
-   AstrBot/data/plugins/astrbot_plugin_message_recorder/
-   ```
-2. 在 AstrBot WebUI 的「插件管理」页面点击「重载插件」
-
-### 方式二：通过插件市场
+### 方式一：插件市场
 
 在 AstrBot WebUI 的插件市场中搜索「消息记录器」并安装
 
-### 依赖说明
+### 方式二：手动安装
 
-如需使用 Web 管理面板，需安装 [astrbot_plugin_multi_web_manager](https://github.com/leafliber/astrbot_plugin_multi_web_manager) 插件。
+将本仓库克隆或下载到 AstrBot 的插件目录：
+
+```
+AstrBot/data/plugins/astrbot_plugin_message_recorder/
+```
+
+然后在 AstrBot WebUI 的「插件管理」页面点击「重载插件」
 
 ---
 
@@ -54,58 +53,65 @@
 
 | 配置项 | 默认值 | 说明 |
 |--------|--------|------|
-| `enable_web_ui` | true | 是否启用 Web 管理面板 |
-| `enable_commands` | true | 是否启用消息记录指令 |
-| `max_records` | 0 | 最大消息记录数，超过时自动清理最旧记录（0 表示不限制） |
-| `retention_days` | 0 | 消息保留天数，超过此天数自动清理（0 表示永久保留） |
-| `save_message_chain` | true | 是否保存完整消息链（包含图片、表情等） |
-| `save_raw_message` | false | 是否保存平台原始消息对象 |
-| `cleanup_interval_hours` | 24 | 自动清理间隔（小时） |
-| `save_media_files` | false | 是否保存多媒体文件（图片、语音、视频、文件）到本地 |
-| `image_save_mode` | original | 图片保存模式：`original` 保存原图，`thumbnail` 保存缩略图 |
+| `enable_web_ui` | `true` | 是否启用 Web 管理面板 |
+| `enable_commands` | `true` | 是否启用消息记录指令 |
+| `max_records` | `100000` | 最大消息记录数，超过时自动清理最旧记录（0 表示不限制） |
+| `retention_days` | `30` | 消息保留天数，超过此天数自动清理（0 表示永久保留） |
+| `save_message_chain` | `true` | 是否保存完整消息链（包含图片、表情等） |
+| `save_raw_message` | `false` | 是否保存平台原始消息对象 |
+| `cleanup_interval_hours` | `24` | 自动清理间隔（小时） |
+| `save_media_files` | `false` | 是否保存多媒体文件（图片、语音、视频、文件）到本地 |
+| `image_save_mode` | `original` | 图片保存模式：`original` 保存原图，`thumbnail` 保存缩略图 |
 
 ---
 
 ## 🌐 Web 管理面板
 
-启用 Web 面板后，可通过 `/message_recorder/` 路径访问管理界面。
+启用 Web 面板后，可在 AstrBot Dashboard 的插件页面中直接访问管理界面，无需额外安装依赖。
 
 ### 仪表盘
 
-- **统计卡片** - 总消息数、群聊消息、私聊消息、平台数
-- **时间趋势图** - 消息数量随时间变化的趋势
-- **平台分布图** - 各平台消息占比
+- **统计卡片** - 总消息数、群聊消息、私聊消息、平台数，交错动画展示
+- **时间趋势图** - 消息数量随时间变化的趋势（ECharts 按需懒加载）
+- **平台分布图** - 各平台消息占比饼图
 - **发送者排行** - 消息发送量排名
 - **群组排行** - 群组活跃度排名
+- **时间范围切换** - 支持今日/近7天/近30天/近90天/全部
+
+> 仪表盘采用渐进式渲染策略：各区域独立骨架屏加载，数据到达后即时填充，无需等待全部数据。
 
 ### 消息搜索
 
 - 多条件组合搜索（平台、群组、发送者、时间范围、关键词）
+- 高级筛选（频道、消息类型、回复消息）
 - 分页浏览历史消息
-- 查看消息详情和上下文
-- 支持查看保存的媒体文件
+- 查看消息详情（模态内联加载）
+- 查看消息上下文
+- 搜索结果可一键跳转导出
 
 ### 数据导出
 
-支持多种导出格式：
+| 格式 | 扩展名 | 说明 |
+|------|--------|------|
+| JSON | `.json` | 标准 JSON 格式，适合数据交换和程序处理 |
+| CSV | `.csv` | 表格格式，可用 Excel 等工具打开 |
+| MRPKG | `.mrpkg` | 专用打包格式（ZIP），包含数据 + 媒体文件，支持导入还原 |
 
-| 格式 | 说明 |
-|------|------|
-| JSON | 标准 JSON 格式，适合数据交换 |
-| CSV | 表格格式，可用 Excel 打开 |
-| MRPKG | 专用打包格式，包含媒体文件，支持导入 |
-
-导出功能支持：
-- 按条件筛选导出
+导出功能特性：
+- 按条件筛选导出，复用搜索条件
 - 异步后台处理，不阻塞操作
-- 打包媒体文件（MRPKG 格式）
+- 实时进度反馈（消息处理进度 + 媒体文件收集进度）
+- 小文件 base64 直接下载，大文件通过 Dashboard 桥接下载
+- MRPKG 格式包含完整媒体文件，支持跨实例迁移
 
 ### 数据导入
 
 - 支持 JSON、CSV、MRPKG 格式导入
-- 大文件分片上传
-- 导入进度实时显示
-- 数据去重处理
+- 小文件（≤50MB）直接上传，大文件自动分片上传（5MB/片）
+- 分片上传实时进度显示
+- 两种导入模式：合并（添加新记录）/ 跳过重复（检测并跳过已存在记录）
+- 导入进度实时轮询显示
+- MRPKG 格式自动还原媒体文件
 
 ---
 
@@ -163,84 +169,82 @@ async def get_message_recorder_api(context: Context):
     return None
 ```
 
-### 核心 API：query() 和 count()
-
-支持任意条件组合的统一查询方法：
+### 核心查询：query() 和 count()
 
 ```python
 mr_api = await get_message_recorder_api(context)
 
-# 基础查询 - 获取最近10条消息
+# 基础查询
 messages = await mr_api.query(limit=10)
 
 # 多条件组合查询
 messages = await mr_api.query(
-    platform="telegram",      # 平台
-    group_id="123456",        # 群组 ID
-    sender_id="user1",        # 发送者 ID
-    time="today",             # 时间范围
-    keyword="关键词",          # 内容搜索
+    platform="telegram",
+    group_id="123456",
+    sender_id="user1",
+    time="today",
+    keyword="关键词",
     limit=20,
-    order="desc"              # 排序方式
+    order="desc"
 )
 
-# 多 ID 查询（同时查询多个发送者）
+# 多 ID 查询
 messages = await mr_api.query(
     sender_ids=["user1", "user2", "user3"],
     time="last7d"
 )
 
-# 多群组查询
+# 频道查询
 messages = await mr_api.query(
-    group_ids=["group1", "group2"],
-    message_type="group"
+    channel_id="987654",
+    time="week"
+)
+
+# 回复查询
+replies = await mr_api.query(
+    reply_to_id="12345678",
+    platform="discord"
 )
 
 # 分页查询
 messages = await mr_api.query(
     group_id="123456",
     limit=20,
-    offset=40  # 第三页（跳过前40条）
+    offset=40
 )
 
-# 统计符合条件的消息数量
-count = await mr_api.count(
-    platform="telegram",
-    time="month"
-)
+# 统计数量
+count = await mr_api.count(platform="telegram", time="month")
 ```
 
 ### 快捷方法
 
 ```python
-# 获取今天的消息
+# 时间相关
 messages = await mr_api.get_today(limit=20)
-
-# 获取昨天的消息
 messages = await mr_api.get_yesterday(limit=20)
-
-# 获取最近 N 小时的消息
 messages = await mr_api.get_recent(hours=6, limit=50)
-
-# 获取最近 N 天的消息
 messages = await mr_api.get_recent_days(days=30, limit=100)
 
-# 搜索消息内容
+# 搜索
 messages = await mr_api.search("关键词", limit=20)
 messages = await mr_api.search("关键词", group_id="123456", time="week")
 
-# 根据ID获取单条消息
+# 单条查询
 message = await mr_api.get_by_id(123)
-
-# 根据平台原始消息ID获取消息
-message = await mr_api.get_by_platform_message_id("12345678")
 message = await mr_api.get_by_platform_message_id("12345678", platform="telegram")
 
-# 获取消息上下文
+# 上下文
 context_messages = await mr_api.get_context(message_id=123, before=5, after=5)
 # 返回 {"before": [...], "after": [...]}
 
-# 获取统计信息
+# 回复
+replies = await mr_api.get_replies("12345678", platform="telegram")
+
+# 频道
+messages = await mr_api.get_by_channel("987654", time="week")
+
+# 统计
 stats = await mr_api.get_stats()
 ```
 
@@ -256,14 +260,16 @@ stats = await mr_api.get_stats()
 | `group_ids` | List[str] | 多个群组 ID 列表 |
 | `session_id` | str | 单个会话 ID |
 | `session_ids` | List[str] | 多个会话 ID 列表 |
-| `message_type` | str | 消息类型：`"group"` 或 `"private"` |
-| `time` | str | 时间字符串（见下表） |
-| `start_time` | int | 开始时间戳（毫秒） |
-| `end_time` | int | 结束时间戳（毫秒） |
+| `channel_id` | str | 频道 ID（Discord 等） |
+| `message_type` | str | 消息类型：`group`、`private`、`channel` |
+| `time` | str | 时间字符串（见时间格式表） |
+| `start_time` | int | 开始时间戳（毫秒），与 time 互斥 |
+| `end_time` | int | 结束时间戳（毫秒），与 time 互斥 |
 | `keyword` | str | 消息内容关键词 |
+| `reply_to_id` | str | 回复的目标消息 ID |
 | `limit` | int | 返回数量限制 |
 | `offset` | int | 偏移量（分页） |
-| `order` | str | `"desc"` 倒序，`"asc"` 正序 |
+| `order` | str | `desc` 倒序，`asc` 正序 |
 
 ### time 参数格式
 
@@ -283,15 +289,18 @@ stats = await mr_api.get_stats()
 class MessageRecord:
     id: int                    # 数据库自增ID
     platform: str              # 平台名称
-    message_id: str            # 消息ID
+    message_id: str            # 平台消息ID
     session_id: str            # 会话ID
-    group_id: str              # 群组ID (私聊为 None)
+    group_id: Optional[str]    # 群组ID (私聊为 None)
+    channel_id: Optional[str]  # 频道ID (Discord等)
     sender_id: str             # 发送者ID
-    sender_name: str           # 发送者昵称
-    message_type: str          # 消息类型 ("group" 或 "private")
-    message_str: str           # 纯文本消息内容
-    message_chain: str         # 消息链 JSON (包含图片、表情等)
-    raw_message: str           # 原始消息 JSON
+    sender_name: Optional[str] # 发送者昵称
+    message_type: str          # 消息类型 (group/private/channel)
+    message_str: Optional[str] # 纯文本消息内容
+    message_chain: Optional[str] # 消息链JSON (包含图片、表情等)
+    raw_message: Optional[str] # 原始消息JSON
+    reply_to_id: Optional[str] # 回复的目标消息ID
+    content_hash: Optional[str] # 内容哈希 (用于去重)
     timestamp: int             # 消息时间戳 (毫秒)
     created_at: int            # 记录创建时间 (毫秒)
 
@@ -307,7 +316,7 @@ message.get_raw_message_dict()           # 解析原始消息为字典
 
 ### 数据库
 
-消息存储在 SQLite 数据库中，路径为：
+消息存储在 SQLite 数据库中（WAL 模式），路径为：
 
 ```
 data/plugin_data/astrbot_plugin_message_recorder/messages.db
@@ -318,18 +327,27 @@ data/plugin_data/astrbot_plugin_message_recorder/messages.db
 | 字段 | 类型 | 说明 |
 |------|------|------|
 | `id` | INTEGER | 自增主键 |
-| `platform` | TEXT | 平台标识 |
-| `message_id` | TEXT | 消息 ID |
+| `platform` | TEXT NOT NULL | 平台标识 |
+| `message_id` | TEXT | 平台消息 ID |
 | `session_id` | TEXT | 会话 ID |
 | `group_id` | TEXT | 群组 ID |
-| `sender_id` | TEXT | 发送者 ID |
+| `channel_id` | TEXT | 频道 ID |
+| `sender_id` | TEXT NOT NULL | 发送者 ID |
 | `sender_name` | TEXT | 发送者昵称 |
-| `message_type` | TEXT | 消息类型 |
+| `message_type` | TEXT NOT NULL | 消息类型 |
 | `message_str` | TEXT | 纯文本内容 |
 | `message_chain` | TEXT | 消息链 JSON |
 | `raw_message` | TEXT | 原始消息 JSON |
-| `timestamp` | INTEGER | 消息时间戳 |
-| `created_at` | INTEGER | 记录创建时间 |
+| `reply_to_id` | TEXT | 回复目标消息 ID |
+| `content_hash` | TEXT | 内容哈希（去重） |
+| `timestamp` | INTEGER NOT NULL | 消息时间戳 |
+| `created_at` | INTEGER NOT NULL | 记录创建时间 |
+
+索引：
+- `(platform, message_id)` 唯一索引 — 防止同平台同消息重复入库
+- `(platform, content_hash)` 唯一索引 — 内容级别去重
+- `timestamp`、`sender_id`、`group_id`、`channel_id`、`session_id`、`reply_to_id` 常规索引
+- FTS5 全文搜索索引 — 支持消息内容关键词搜索
 
 ### 多媒体文件
 
@@ -337,18 +355,19 @@ data/plugin_data/astrbot_plugin_message_recorder/messages.db
 
 ```
 data/plugin_data/astrbot_plugin_message_recorder/media/
-├── images/     # 图片
-│   └── 2026-04/   # 按年月分目录
-├── records/    # 语音
-├── videos/     # 视频
-└── files/      # 其他文件
+├── images/       # 图片
+│   ├── a1/       # 按内容哈希前2位分目录
+│   ├── b2/
+│   └── ...
+├── records/      # 语音
+├── videos/       # 视频
+└── files/        # 其他文件
 ```
 
-**文件命名规则：**
+**存储策略：**
 
-媒体文件使用**内容 SHA256 hash** 命名（取前16位），自动去重：
-- 相同内容的文件只保存一份
-- 避免重复下载和存储
+- 文件名使用**内容 SHA256 哈希**（取前16位），相同内容只保存一份
+- 目录按哈希前2位分组，避免单目录文件过多，同时确保跨时间段的相同文件不会重复存储
 - 文件名示例：`a1b2c3d4e5f6g7h8.jpg`
 
 ---
@@ -360,23 +379,20 @@ data/plugin_data/astrbot_plugin_message_recorder/media/
 ```python
 mr_api = await get_message_recorder_api(context)
 
-# 查询消息
 messages = await mr_api.query(limit=10)
 
 for msg in messages:
-    # 从消息中提取媒体文件路径
     media_paths = mr_api.extract_media_paths(msg)
-    
+
     for rel_path in media_paths:
         # 获取绝对路径（文件不存在返回 None）
         abs_path = mr_api.get_media_absolute_path(rel_path)
         if abs_path:
             with open(abs_path, "rb") as f:
                 image_data = f.read()
-        
+
         # 获取 Web 访问 URL
         web_url = mr_api.get_media_url(rel_path)
-        # 返回: /message_recorder/api/media/images/2026-04/abc123.jpg
 ```
 
 ### 媒体相关 API 方法
@@ -390,15 +406,8 @@ for msg in messages:
 
 ### Web API 访问媒体
 
-媒体文件可通过 HTTP API 直接访问：
-
 ```
 GET /message_recorder/api/media/{relative_path}
-```
-
-示例：
-```
-GET /message_recorder/api/media/images/2026-04/a1b2c3d4e5f6g7h8.jpg
 ```
 
 消息详情 API 返回的 `message_chain` 中会自动包含 `media_url` 字段：
@@ -409,12 +418,43 @@ GET /message_recorder/api/media/images/2026-04/a1b2c3d4e5f6g7h8.jpg
     {
       "type": "Image",
       "url": "https://example.com/image.jpg",
-      "local_path": "images/2026-04/a1b2c3d4e5f6g7h8.jpg",
-      "media_url": "/message_recorder/api/media/images/2026-04/a1b2c3d4e5f6g7h8.jpg"
+      "local_path": "images/a1/a1b2c3d4e5f6g7h8.jpg",
+      "media_url": "/message_recorder/api/media/images/a1/a1b2c3d4e5f6g7h8.jpg"
     }
   ]
 }
 ```
+
+---
+
+## 🔗 Web API 列表
+
+插件注册了以下 Web API 端点（前缀 `/message_recorder/api/`）：
+
+| 端点 | 方法 | 说明 |
+|------|------|------|
+| `stats` | GET | 获取统计概览 |
+| `stats/timeline` | GET | 获取时间趋势数据 |
+| `stats/senders` | GET | 获取发送者排行 |
+| `stats/groups` | GET | 获取群组排行 |
+| `messages` | GET | 查询消息列表 |
+| `message/detail` | GET | 获取消息详情 |
+| `message/context` | GET | 获取消息上下文 |
+| `search` | GET | 搜索消息 |
+| `export` | POST | 创建导出任务 |
+| `export/status` | GET | 查询导出状态 |
+| `export/download` | GET | 下载导出文件（大文件） |
+| `export/download_data` | GET | 获取导出文件数据（base64，小文件） |
+| `import/upload` | POST | 简单文件导入 |
+| `import/init` | POST | 初始化分片导入 |
+| `import/chunk/<session_id>/<index>` | POST | 上传分片 |
+| `import/complete` | POST | 完成分片导入 |
+| `import/status` | GET | 查询导入状态 |
+| `platforms` | GET | 获取平台列表 |
+| `senders` | GET | 获取发送者列表 |
+| `groups` | GET | 获取群组列表 |
+| `media` | GET | 获取媒体文件 |
+| `schema_version` | GET | 获取数据库 Schema 版本 |
 
 ---
 
