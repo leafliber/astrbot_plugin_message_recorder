@@ -5,7 +5,7 @@ from datetime import datetime, timedelta
 
 import pytest
 
-from astrbot_plugin_message_recorder.time_utils import (
+from astrbot_plugin_message_recorder.message_recorder.time_utils import (
     get_day_start_end,
     parse_relative_time,
     parse_date,

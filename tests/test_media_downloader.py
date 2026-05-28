@@ -6,7 +6,7 @@ from unittest.mock import patch, MagicMock, AsyncMock
 
 import pytest
 
-from astrbot_plugin_message_recorder.media_downloader import (
+from astrbot_plugin_message_recorder.message_recorder.media_downloader import (
     MediaDownloader,
     MEDIA_TYPE_MAP,
 )
@@ -28,7 +28,7 @@ class TestMediaTypeMap:
 class TestMediaDownloaderInit:
     def test_init(self, tmp_path):
         with patch(
-            "astrbot_plugin_message_recorder.media_downloader.get_astrbot_plugin_data_path",
+            "astrbot_plugin_message_recorder.message_recorder.media_downloader.get_astrbot_plugin_data_path",
             return_value=str(tmp_path),
         ):
             md = MediaDownloader("test_plugin")
@@ -53,7 +53,7 @@ class TestExtractMediaPaths:
 class TestDeleteMediaFile:
     def test_delete_existing(self, tmp_path):
         with patch(
-            "astrbot_plugin_message_recorder.media_downloader.get_astrbot_plugin_data_path",
+            "astrbot_plugin_message_recorder.message_recorder.media_downloader.get_astrbot_plugin_data_path",
             return_value=str(tmp_path),
         ):
             md = MediaDownloader("test_plugin")
@@ -66,7 +66,7 @@ class TestDeleteMediaFile:
 
     def test_delete_nonexistent(self, tmp_path):
         with patch(
-            "astrbot_plugin_message_recorder.media_downloader.get_astrbot_plugin_data_path",
+            "astrbot_plugin_message_recorder.message_recorder.media_downloader.get_astrbot_plugin_data_path",
             return_value=str(tmp_path),
         ):
             md = MediaDownloader("test_plugin")
@@ -74,7 +74,7 @@ class TestDeleteMediaFile:
 
     def test_delete_empty_path(self, tmp_path):
         with patch(
-            "astrbot_plugin_message_recorder.media_downloader.get_astrbot_plugin_data_path",
+            "astrbot_plugin_message_recorder.message_recorder.media_downloader.get_astrbot_plugin_data_path",
             return_value=str(tmp_path),
         ):
             md = MediaDownloader("test_plugin")
@@ -84,7 +84,7 @@ class TestDeleteMediaFile:
 class TestDeleteMediaFiles:
     def test_delete_multiple(self, tmp_path):
         with patch(
-            "astrbot_plugin_message_recorder.media_downloader.get_astrbot_plugin_data_path",
+            "astrbot_plugin_message_recorder.message_recorder.media_downloader.get_astrbot_plugin_data_path",
             return_value=str(tmp_path),
         ):
             md = MediaDownloader("test_plugin")

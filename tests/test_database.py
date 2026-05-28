@@ -10,9 +10,9 @@ from unittest.mock import patch, MagicMock
 import pytest
 import aiosqlite
 
-from astrbot_plugin_message_recorder.database import Database, _row_to_record
-from astrbot_plugin_message_recorder.models import MessageRecord, QueryFilter
-from astrbot_plugin_message_recorder.serializer import compute_content_hash
+from astrbot_plugin_message_recorder.message_recorder.database import Database, _row_to_record
+from astrbot_plugin_message_recorder.message_recorder.models import MessageRecord, QueryFilter
+from astrbot_plugin_message_recorder.message_recorder.serializer import compute_content_hash
 
 
 @pytest.fixture
@@ -23,7 +23,7 @@ def tmp_db_path(tmp_path):
 @pytest.fixture
 async def db(tmp_db_path):
     with patch(
-        "astrbot_plugin_message_recorder.database.get_astrbot_plugin_data_path",
+        "astrbot_plugin_message_recorder.message_recorder.database.get_astrbot_plugin_data_path",
         return_value=str(tmp_db_path.parent),
     ):
         database = Database("test_plugin")

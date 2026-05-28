@@ -3,7 +3,7 @@
 import json
 import pytest
 
-from astrbot_plugin_message_recorder.serializer import (
+from astrbot_plugin_message_recorder.message_recorder.serializer import (
     serialize_component,
     serialize_message_chain,
     extract_reply_info,

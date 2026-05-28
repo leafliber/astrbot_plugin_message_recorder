@@ -2,36 +2,36 @@
 
 import asyncio
 import json
+import sys
 import time
+from pathlib import Path
 from typing import Optional
+
+plugin_root = Path(__file__).parent
+if str(plugin_root) not in sys.path:
+    sys.path.insert(0, str(plugin_root))
 
 from astrbot.api import AstrBotConfig, logger
 from astrbot.api.event import filter, AstrMessageEvent
 from astrbot.api.star import Context, Star, register
 
-from .database import Database
-from .api import MessageRecorderAPI
-from .models import MessageRecord
-from .time_utils import parse_time_range, format_time_range, normalize_timestamp
-from .media_downloader import MediaDownloader, MEDIA_TYPE_MAP
-from .serializer import (
+from message_recorder.database import Database
+from message_recorder.api import MessageRecorderAPI
+from message_recorder.models import MessageRecord
+from message_recorder.time_utils import parse_time_range, format_time_range, normalize_timestamp
+from message_recorder.media_downloader import MediaDownloader, MEDIA_TYPE_MAP
+from message_recorder.serializer import (
     serialize_message_chain,
     extract_reply_info,
     extract_media_url as serializer_extract_media_url,
 )
-from .platform_adapter import get_adapter
-from .web_api import register_all_web_apis, cleanup_expired_tasks
+from message_recorder.platform_adapter import get_adapter
+from message_recorder.web_api import register_all_web_apis, cleanup_expired_tasks
 
 MAX_CONCURRENT_SAVES = 8
 MAX_CONCURRENT_DOWNLOADS = 4
 
 
-@register(
-    name="astrbot_plugin_message_recorder",
-    desc="多平台消息记录器，将消息保存到 SQLite 数据库",
-    author="Leafiber",
-    version="2.0.0",
-)
 class MessageRecorder(Star):
     """消息记录器插件主类"""
 

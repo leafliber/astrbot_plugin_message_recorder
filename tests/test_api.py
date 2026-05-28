@@ -7,16 +7,16 @@ from unittest.mock import patch, AsyncMock
 
 import pytest
 
-from astrbot_plugin_message_recorder.api import MessageRecorderAPI
-from astrbot_plugin_message_recorder.database import Database
-from astrbot_plugin_message_recorder.models import MessageRecord, QueryFilter, SCHEMA_VERSION
-from astrbot_plugin_message_recorder.serializer import compute_content_hash
+from astrbot_plugin_message_recorder.message_recorder.api import MessageRecorderAPI
+from astrbot_plugin_message_recorder.message_recorder.database import Database
+from astrbot_plugin_message_recorder.message_recorder.models import MessageRecord, QueryFilter, SCHEMA_VERSION
+from astrbot_plugin_message_recorder.message_recorder.serializer import compute_content_hash
 
 
 @pytest.fixture
 async def db_and_api(tmp_path):
     with patch(
-        "astrbot_plugin_message_recorder.database.get_astrbot_plugin_data_path",
+        "astrbot_plugin_message_recorder.message_recorder.database.get_astrbot_plugin_data_path",
         return_value=str(tmp_path.parent),
     ):
         database = Database("test_api")

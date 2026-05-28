@@ -2,7 +2,7 @@
 
 import pytest
 
-from astrbot_plugin_message_recorder.platform_adapter import (
+from astrbot_plugin_message_recorder.message_recorder.platform_adapter import (
     PlatformAdapter,
     TelegramAdapter,
     DiscordAdapter,

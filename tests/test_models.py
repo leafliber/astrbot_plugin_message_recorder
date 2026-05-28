@@ -3,7 +3,7 @@
 import json
 import pytest
 
-from astrbot_plugin_message_recorder.models import (
+from astrbot_plugin_message_recorder.message_recorder.models import (
     MessageRecord,
     QueryFilter,
     MessageStats,

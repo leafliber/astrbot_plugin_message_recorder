@@ -4,7 +4,7 @@
 
 [![AstrBot](https://img.shields.io/badge/AstrBot-%3E4.16%2C%3C5-blue?style=for-the-badge)](https://github.com/Soulter/astrbot)
 [![Python](https://img.shields.io/badge/Python-3.10+-green?style=for-the-badge)](https://www.python.org/)
-[![License](https://img.shields.io/badge/License-MIT-yellow?style=for-the-badge)](LICENSE)
+[![License](https://img.shields.io/badge/License-AGPL--3.0-blue?style=for-the-badge)](LICENSE)
 
 **多平台消息记录插件 | SQLite 存储 | Web 管理面板 | 丰富查询 API**
 
@@ -53,10 +53,9 @@ AstrBot/data/plugins/astrbot_plugin_message_recorder/
 
 | 配置项 | 默认值 | 说明 |
 |--------|--------|------|
-| `enable_web_ui` | `true` | 是否启用 Web 管理面板 |
 | `enable_commands` | `true` | 是否启用消息记录指令 |
-| `max_records` | `100000` | 最大消息记录数，超过时自动清理最旧记录（0 表示不限制） |
-| `retention_days` | `30` | 消息保留天数，超过此天数自动清理（0 表示永久保留） |
+| `max_records` | `0` | 最大消息记录数，超过时自动清理最旧记录（0 表示不限制） |
+| `retention_days` | `0` | 消息保留天数，超过此天数自动清理（0 表示永久保留） |
 | `save_message_chain` | `true` | 是否保存完整消息链（包含图片、表情等） |
 | `save_raw_message` | `false` | 是否保存平台原始消息对象 |
 | `cleanup_interval_hours` | `24` | 自动清理间隔（小时） |
@@ -287,22 +286,22 @@ stats = await mr_api.get_stats()
 ```python
 @dataclass
 class MessageRecord:
-    id: int                    # 数据库自增ID
-    platform: str              # 平台名称
-    message_id: str            # 平台消息ID
-    session_id: str            # 会话ID
-    group_id: Optional[str]    # 群组ID (私聊为 None)
-    channel_id: Optional[str]  # 频道ID (Discord等)
-    sender_id: str             # 发送者ID
-    sender_name: Optional[str] # 发送者昵称
-    message_type: str          # 消息类型 (group/private/channel)
-    message_str: Optional[str] # 纯文本消息内容
+    id: Optional[int]           # 数据库自增ID
+    platform: str               # 平台名称
+    message_id: str             # 平台消息ID
+    session_id: str             # 会话ID
+    group_id: Optional[str]     # 群组ID (私聊为 None)
+    channel_id: Optional[str]   # 频道ID (Discord等)
+    sender_id: str              # 发送者ID
+    sender_name: Optional[str]  # 发送者昵称
+    message_type: str           # 消息类型 (group/private/channel)
+    message_str: Optional[str]  # 纯文本消息内容
     message_chain: Optional[str] # 消息链JSON (包含图片、表情等)
-    raw_message: Optional[str] # 原始消息JSON
-    reply_to_id: Optional[str] # 回复的目标消息ID
+    raw_message: Optional[str]  # 原始消息JSON
+    reply_to_id: Optional[str]  # 回复的目标消息ID
     content_hash: Optional[str] # 内容哈希 (用于去重)
-    timestamp: int             # 消息时间戳 (毫秒)
-    created_at: int            # 记录创建时间 (毫秒)
+    timestamp: int              # 消息时间戳 (毫秒)
+    created_at: int             # 记录创建时间 (毫秒)
 
 # 辅助方法
 message.to_dict()                        # 转为字典
@@ -322,7 +321,7 @@ message.get_raw_message_dict()           # 解析原始消息为字典
 data/plugin_data/astrbot_plugin_message_recorder/messages.db
 ```
 
-表结构：
+表结构（Schema Version 2）：
 
 | 字段 | 类型 | 说明 |
 |------|------|------|
@@ -458,6 +457,31 @@ GET /message_recorder/api/media/{relative_path}
 
 ---
 
+## 🏗️ 项目结构
+
+```
+astrbot_plugin_message_recorder/
+├── main.py                  # 插件主入口
+├── message_recorder/        # 核心源码
+│   ├── __init__.py
+│   ├── api.py               # 对外 API 接口
+│   ├── database.py          # SQLite 数据库操作
+│   ├── media_downloader.py  # 多媒体文件下载
+│   ├── models.py            # 数据模型定义
+│   ├── platform_adapter.py  # 平台适配器
+│   ├── serializer.py        # 消息链序列化
+│   ├── time_utils.py        # 时间工具
+│   └── web_api.py           # Web API 注册
+├── pages/                   # Web 前端页面
+│   └── recorder/
+├── tests/                   # 测试用例
+├── _conf_schema.json        # 配置项定义
+├── metadata.yaml            # 插件元数据
+└── requirements.txt         # 依赖列表
+```
+
+---
+
 ## 🛠️ 开发
 
 ### 本地调试
@@ -475,11 +499,17 @@ GET /message_recorder/api/media/{relative_path}
 ruff format .
 ```
 
+### 运行测试
+
+```bash
+python3 -m pytest tests/ -v
+```
+
 ---
 
 ## 📄 许可证
 
-[MIT License](LICENSE)
+[GNU Affero General Public License v3.0](LICENSE)
 
 ---
 

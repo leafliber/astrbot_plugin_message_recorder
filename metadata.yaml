@@ -1,16 +1,14 @@
 name: astrbot_plugin_message_recorder
 desc: 多平台消息记录器，将消息保存到 SQLite 数据库，并提供导入导出
-version: 1.0.1
+version: 0.0.2
 author: Leafiber
 repo: https://github.com/leafliber/astrbot_plugin_message_recorder
 display_name: 消息记录器
 support_platforms:
+  - aiocqhttp
   - telegram
   - discord
   - qq_official
-  - qq_private
-  - wechat
-  - generic
 astrbot_version: ">=4.16,<5"
 keywords:
   - 消息记录
