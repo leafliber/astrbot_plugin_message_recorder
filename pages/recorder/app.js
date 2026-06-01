@@ -380,10 +380,9 @@ async function loadDashboardData(force = false) {
         const stats = extractData(statsResult);
         dataCache.stats = stats;
         updateStatsCards(stats);
-        if (echartsLoaded) {
-          clearChartSkeleton('platformChart');
-          updatePlatformChart(stats.platform_stats);
-        }
+        await loadEcharts().catch(() => {});
+        clearChartSkeleton('platformChart');
+        updatePlatformChart(stats.platform_stats);
       } catch (e) {
         logError('Failed to process stats:', e);
         document.querySelectorAll('.stat-value.loading').forEach(el => {
@@ -399,10 +398,9 @@ async function loadDashboardData(force = false) {
     if (timelineResult) {
       try {
         const timelineData = extractData(timelineResult);
-        if (echartsLoaded) {
-          clearChartSkeleton('timelineChart');
-          updateTimelineChart(timelineData.points);
-        }
+        await loadEcharts().catch(() => {});
+        clearChartSkeleton('timelineChart');
+        updateTimelineChart(timelineData.points);
       } catch (e) {
         logError('Failed to process timeline:', e);
         clearChartSkeleton('timelineChart');

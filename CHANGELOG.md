@@ -65,4 +65,4 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - 对外 API 接口供其他插件调用
 - 自动清理过期数据和孤立媒体文件
 - FTS5 全文搜索索引
-- JSON/CSV/MRPKG 格式导入导出
+- JSON/CSV/ZIP 格式导入导出

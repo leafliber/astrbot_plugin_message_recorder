@@ -236,7 +236,7 @@
           </label>
         </div>
         <div id="mediaNote" class="info-note" style="display: none;">
-          💡 勾选后将以 <code>.mrpkg</code> 格式导出（包含数据 + 媒体文件的压缩包），文件体积可能较大。仅 JSON 格式支持此选项。
+          💡 勾选后将以 <code>.zip</code> 格式导出（包含数据 + 媒体文件的压缩包），文件体积可能较大。仅 JSON 格式支持此选项。
         </div>
       </div>
       <div class="card text-center">
@@ -251,9 +251,9 @@
         <div class="upload-area" id="uploadArea">
           <div class="upload-icon">📁</div>
           <p>拖拽文件到这里，或点击选择文件</p>
-          <p class="text-muted">支持 JSON、CSV、MRPKG（含媒体文件包）格式，最大 4GB</p>
+          <p class="text-muted">支持 JSON、CSV、ZIP（含媒体文件包）格式，最大 4GB</p>
           <p class="text-muted" style="font-size: 0.8rem;">大文件（超过 50MB）将自动使用分片上传</p>
-          <input type="file" id="importFile" accept=".json,.csv,.mrpkg" style="display: none;">
+          <input type="file" id="importFile" accept=".json,.csv,.zip" style="display: none;">
         </div>
         <div id="fileInfo" style="display: none; margin-top: 1rem;"></div>
       </div>

@@ -26,7 +26,7 @@ from .time_utils import parse_time_range, normalize_timestamp
 MAX_IMPORT_FILE_SIZE = 4 * 1024 * 1024 * 1024
 MAX_EXPORT_FILE_AGE = 3600
 MAX_DOWNLOAD_DATA_SIZE = 50 * 1024 * 1024
-ALLOWED_IMPORT_EXTENSIONS = {".json", ".csv", ".mrpkg"}
+ALLOWED_IMPORT_EXTENSIONS = {".json", ".csv", ".zip"}
 CHUNK_SIZE = 5 * 1024 * 1024
 CHUNK_SESSION_MAX_AGE = 3600
 DB_OPERATION_TIMEOUT = 30
@@ -1187,9 +1187,9 @@ async def _execute_import_task(task_id: str, db: Database, file_path: str, mode:
             task["status"] = "failed"
             return
 
-        # mrpkg 需要特殊处理（ZIP 解压 + 媒体恢复），仍需一次性加载
-        if file_ext == ".mrpkg":
-            records_list, media_restored = await _import_mrpkg(file_path)
+        # zip 需要特殊处理（解压 + 媒体恢复），仍需一次性加载
+        if file_ext == ".zip":
+            records_list, media_restored = await _import_zip_package(file_path)
             records = records_list
             task["total_records"] = len(records_list)
         elif file_ext == ".json":
@@ -1304,14 +1304,14 @@ async def _execute_import_task(task_id: str, db: Database, file_path: str, mode:
         task["completed_at"] = time.time()
 
 
-async def _import_mrpkg(file_path: str) -> tuple:
+async def _import_zip_package(file_path: str) -> tuple:
     media_base = Path(get_astrbot_plugin_data_path()) / PLUGIN_DIR_NAME / "media"
     records = []
     media_restored = 0
 
     with zipfile.ZipFile(file_path, "r") as zf:
         if "data.json" not in zf.namelist():
-            raise ValueError("无效的 .mrpkg 包：缺少 data.json")
+            raise ValueError("无效的导入包：缺少 data.json")
         with zf.open("data.json") as f:
             data = json.loads(f.read().decode("utf-8"))
         if isinstance(data, dict) and "messages" in data:
