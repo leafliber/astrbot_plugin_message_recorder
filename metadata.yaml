@@ -1,9 +1,9 @@
 name: astrbot_plugin_message_recorder
-desc: 全平台消息记录器 — 自动记录 Telegram、QQ、Discord 等 18 个平台的聊天消息到 SQLite，提供 Web 管理面板、全文搜索、数据导入导出和供其他插件调用的查询 API
+desc: 自动记录所有平台的聊天消息到SQLite，提供 Web 管理面板、全文搜索、数据导入导出和供其他插件调用的查询 API
 version: 0.0.3
 author: Leafiber
 repo: https://github.com/leafliber/astrbot_plugin_message_recorder
-display_name: 消息记录器
+display_name: 全平台消息记录器
 support_platforms:
   - aiocqhttp
   - telegram
