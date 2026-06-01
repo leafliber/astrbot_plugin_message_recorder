@@ -223,40 +223,44 @@ def _get_platform_icon(platform: str) -> str:
     return icons.get(platform, f"[{platform}]")
 
 
-def _safe_remove_file(file_path: str, max_retries: int = 3, delay: float = 0.5) -> bool:
+async def _safe_remove_file(file_path: str, max_retries: int = 3, delay: float = 0.5) -> bool:
     for attempt in range(max_retries):
         try:
             os.remove(file_path)
             return True
         except OSError:
             if attempt < max_retries - 1:
-                time.sleep(delay)
+                await asyncio.sleep(delay)
             else:
                 return False
     return False
 
 
-def _cleanup_temp_dir() -> None:
+async def _cleanup_temp_dir() -> None:
     temp_dir = _get_plugin_data_dir() / "temp"
     if not temp_dir.exists():
         return
-    cleaned = 0
-    for item in temp_dir.iterdir():
-        try:
-            if item.is_file():
-                item.unlink()
-                cleaned += 1
-            elif item.is_dir():
-                shutil.rmtree(item, ignore_errors=True)
-                cleaned += 1
-        except Exception as e:
-            logger.warning(f"[MessageRecorder Web] 清理临时文件失败: {item}, {e}")
-    if cleaned > 0:
-        logger.info(f"[MessageRecorder Web] 清理了 {cleaned} 个残留临时文件/目录")
+
+    def _do_cleanup():
+        cleaned = 0
+        for item in temp_dir.iterdir():
+            try:
+                if item.is_file():
+                    item.unlink()
+                    cleaned += 1
+                elif item.is_dir():
+                    shutil.rmtree(item, ignore_errors=True)
+                    cleaned += 1
+            except Exception as e:
+                logger.warning(f"[MessageRecorder Web] 清理临时文件失败: {item}, {e}")
+        if cleaned > 0:
+            logger.info(f"[MessageRecorder Web] 清理了 {cleaned} 个残留临时文件/目录")
+
+    await asyncio.to_thread(_do_cleanup)
 
 
-def register_all_web_apis(context, db: Database):
-    _cleanup_temp_dir()
+async def register_all_web_apis(context, db: Database):
+    await _cleanup_temp_dir()
 
     prefix = f"/{PLUGIN_DIR_NAME}"
 
@@ -512,7 +516,7 @@ def register_all_web_apis(context, db: Database):
         if file_age > MAX_EXPORT_FILE_AGE:
             file_path = task.get("file_path")
             if file_path and os.path.exists(file_path):
-                _safe_remove_file(file_path)
+                await _safe_remove_file(file_path)
             _export_tasks.pop(task_id, None)
             return jsonify({"success": False, "error": "导出文件已过期，请重新导出"}), 410
         file_path = task.get("file_path")
@@ -542,7 +546,7 @@ def register_all_web_apis(context, db: Database):
         if file_age > MAX_EXPORT_FILE_AGE:
             file_path = task.get("file_path")
             if file_path and os.path.exists(file_path):
-                _safe_remove_file(file_path)
+                await _safe_remove_file(file_path)
             _export_tasks.pop(task_id, None)
             return jsonify({"success": False, "error": "导出文件已过期，请重新导出"})
         file_path = task.get("file_path")
@@ -917,6 +921,18 @@ async def _execute_export_task(task_id: str, db: Database, query_filter: QueryFi
         task["completed_at"] = time.time()
 
 
+def _replace_pending_count(file_path: Path, placeholder: str, count: int) -> None:
+    """只读取文件头部替换 PENDING 占位符，避免加载整个文件"""
+    HEADER_READ_SIZE = 4096
+    replacement = placeholder.replace("PENDING", str(count))
+    with open(file_path, "r+b") as f:
+        header = f.read(HEADER_READ_SIZE).decode("utf-8")
+        new_header = header.replace(placeholder, replacement)
+        if new_header != header:
+            f.seek(0)
+            f.write(new_header.encode("utf-8"))
+
+
 async def _export_json(task_id, db, query_filter, export_dir, include_chain, include_raw, task):
     file_path = export_dir / f"{task_id}.json"
     count = 0
@@ -944,12 +960,7 @@ async def _export_json(task_id, db, query_filter, export_dir, include_chain, inc
                 task["progress"] = f"已导出 {count} 条消息"
         f.write("\n  ]\n")
         f.write("}")
-    with open(file_path, "r+", encoding="utf-8") as f:
-        content = f.read()
-        content = content.replace('"total_records": "PENDING"', f'"total_records": {count}')
-        f.seek(0)
-        f.write(content)
-        f.truncate()
+    _replace_pending_count(file_path, '"total_records": "PENDING"', count)
     task["actual_count"] = count
     return file_path
 
@@ -990,12 +1001,7 @@ async def _export_txt(task_id, db, query_filter, export_dir, task):
             count += 1
             if count % 1000 == 0:
                 task["progress"] = f"已导出 {count} 条消息"
-    with open(file_path, "r+", encoding="utf-8") as f:
-        content = f.read()
-        content = content.replace("总记录数: PENDING", f"总记录数: {count}")
-        f.seek(0)
-        f.write(content)
-        f.truncate()
+    _replace_pending_count(file_path, "总记录数: PENDING", count)
     task["actual_count"] = count
     return file_path
 
@@ -1040,12 +1046,7 @@ async def _export_with_media(task_id, db, query_filter, export_dir, include_chai
         f.write("\n  ]\n")
         f.write("}")
 
-    with open(temp_json_path, "r+", encoding="utf-8") as f:
-        content = f.read()
-        content = content.replace('"total_records": "PENDING"', f'"total_records": {count}')
-        f.seek(0)
-        f.write(content)
-        f.truncate()
+    _replace_pending_count(temp_json_path, '"total_records": "PENDING"', count)
 
     task["progress"] = f"正在打包媒体文件 (共 {len(media_files_collected)} 个)..."
 
@@ -1064,13 +1065,39 @@ async def _export_with_media(task_id, db, query_filter, export_dir, include_chai
                 except Exception as e:
                     logger.warning(f"[MessageRecorder Web] 打包媒体文件失败 {rel_path}: {e}")
 
-    _safe_remove_file(str(temp_json_path))
+    await _safe_remove_file(str(temp_json_path))
     task["actual_count"] = count
     task["media_count"] = added
     return pkg_path
 
 
 # ========== Import Task Execution ==========
+
+def _iter_json_records(file_path: str):
+    """流式迭代 JSON 记录，避免一次性加载整个文件到内存"""
+    try:
+        import ijson
+        with open(file_path, "rb") as f:
+            peek = f.read(1)
+            f.seek(0)
+            if peek == b"{":
+                yield from ijson.items(f, "messages.item")
+            else:
+                yield from ijson.items(f, "item")
+    except ImportError:
+        with open(file_path, encoding="utf-8") as f:
+            data = json.load(f)
+            if isinstance(data, dict) and "messages" in data:
+                yield from data["messages"]
+            elif isinstance(data, list):
+                yield from data
+
+
+def _iter_csv_records(file_path: str):
+    """流式迭代 CSV 记录"""
+    with open(file_path, encoding="utf-8", newline="") as f:
+        yield from csv.DictReader(f)
+
 
 async def _execute_import_task(task_id: str, db: Database, file_path: str, mode: str):
     MAX_FIELD_LENGTH = 65535
@@ -1128,39 +1155,50 @@ async def _execute_import_task(task_id: str, db: Database, file_path: str, mode:
             "created_at": record.get("created_at"),
         }
 
+    def make_message_record(sanitized: dict) -> MessageRecord:
+        return MessageRecord(
+            platform=sanitized["platform"],
+            message_id=sanitized["message_id"],
+            session_id=sanitized["session_id"],
+            group_id=sanitized["group_id"],
+            channel_id=sanitized["channel_id"],
+            sender_id=sanitized["sender_id"],
+            sender_name=sanitized["sender_name"],
+            message_type=sanitized["message_type"],
+            message_str=sanitized["message_str"],
+            message_chain=json.dumps(sanitized["message_chain"]) if sanitized["message_chain"] else None,
+            raw_message=json.dumps(sanitized["raw_message"]) if sanitized["raw_message"] else None,
+            reply_to_id=sanitized["reply_to_id"],
+            timestamp=normalize_timestamp(sanitized["timestamp"]),
+            created_at=normalize_timestamp(sanitized["created_at"]),
+        )
+
     task = _import_tasks.get(task_id)
     if not task:
         return
 
     try:
         task["status"] = "processing"
-        records = []
         file_ext = Path(file_path).suffix.lower()
         media_restored = 0
-
-        if file_ext == ".mrpkg":
-            records, media_restored = await _import_mrpkg(file_path)
-        elif file_ext == ".json":
-            with open(file_path, encoding="utf-8") as f:
-                data = json.load(f)
-                if isinstance(data, dict) and "messages" in data:
-                    records = data["messages"]
-                elif isinstance(data, list):
-                    records = data
-        elif file_ext == ".csv":
-            with open(file_path, encoding="utf-8", newline="") as f:
-                reader = csv.DictReader(f)
-                records = list(reader)
-        else:
-            task["status"] = "failed"
-            task["error"] = "不支持的文件格式"
-            return
-
-        task["total_records"] = len(records)
 
         if mode == "replace":
             task["error"] = "replace 模式暂不支持"
             task["status"] = "failed"
+            return
+
+        # mrpkg 需要特殊处理（ZIP 解压 + 媒体恢复），仍需一次性加载
+        if file_ext == ".mrpkg":
+            records_list, media_restored = await _import_mrpkg(file_path)
+            records = records_list
+            task["total_records"] = len(records_list)
+        elif file_ext == ".json":
+            records = _iter_json_records(file_path)
+        elif file_ext == ".csv":
+            records = _iter_csv_records(file_path)
+        else:
+            task["status"] = "failed"
+            task["error"] = "不支持的文件格式"
             return
 
         imported = 0
@@ -1169,17 +1207,22 @@ async def _execute_import_task(task_id: str, db: Database, file_path: str, mode:
 
         if mode == "skip_duplicates":
             platform_message_map: dict = {}
-            for i, record in enumerate(records):
+            no_id_records: list = []
+
+            for record in records:
+                task["total_records"] += 1
                 sanitized = sanitize_import_record(record)
                 if sanitized is None:
                     errors += 1
                     continue
-                platform = sanitized["platform"]
                 message_id = sanitized["message_id"]
                 if message_id:
+                    platform = sanitized["platform"]
                     if platform not in platform_message_map:
                         platform_message_map[platform] = {}
-                    platform_message_map[platform][message_id] = (i, sanitized)
+                    platform_message_map[platform][message_id] = sanitized
+                else:
+                    no_id_records.append(sanitized)
 
             existing_ids_by_platform: dict = {}
             for platform, msg_map in platform_message_map.items():
@@ -1195,28 +1238,13 @@ async def _execute_import_task(task_id: str, db: Database, file_path: str, mode:
 
             for platform, msg_map in platform_message_map.items():
                 existing_ids = existing_ids_by_platform.get(platform, set())
-                for message_id, (original_index, sanitized) in msg_map.items():
-                    task["processed"] = original_index + 1
+                for message_id, sanitized in msg_map.items():
+                    task["processed"] += 1
                     if message_id in existing_ids:
                         skipped += 1
                         continue
                     try:
-                        msg_record = MessageRecord(
-                            platform=platform,
-                            message_id=message_id,
-                            session_id=sanitized["session_id"],
-                            group_id=sanitized["group_id"],
-                            channel_id=sanitized["channel_id"],
-                            sender_id=sanitized["sender_id"],
-                            sender_name=sanitized["sender_name"],
-                            message_type=sanitized["message_type"],
-                            message_str=sanitized["message_str"],
-                            message_chain=json.dumps(sanitized["message_chain"]) if sanitized["message_chain"] else None,
-                            raw_message=json.dumps(sanitized["raw_message"]) if sanitized["raw_message"] else None,
-                            reply_to_id=sanitized["reply_to_id"],
-                            timestamp=normalize_timestamp(sanitized["timestamp"]),
-                            created_at=normalize_timestamp(sanitized["created_at"]),
-                        )
+                        msg_record = make_message_record(sanitized)
                         saved_id = await asyncio.wait_for(db.save_message(msg_record), timeout=IMPORT_RECORD_TIMEOUT)
                         if saved_id == -1:
                             skipped += 1
@@ -1226,30 +1254,30 @@ async def _execute_import_task(task_id: str, db: Database, file_path: str, mode:
                         errors += 1
                     except Exception:
                         errors += 1
+
+            for sanitized in no_id_records:
+                task["processed"] += 1
+                try:
+                    msg_record = make_message_record(sanitized)
+                    saved_id = await asyncio.wait_for(db.save_message(msg_record), timeout=IMPORT_RECORD_TIMEOUT)
+                    if saved_id == -1:
+                        skipped += 1
+                    else:
+                        imported += 1
+                except asyncio.TimeoutError:
+                    errors += 1
+                except Exception:
+                    errors += 1
         else:
-            for i, record in enumerate(records):
-                task["processed"] = i + 1
+            for record in records:
+                task["total_records"] += 1
+                task["processed"] += 1
                 try:
                     sanitized = sanitize_import_record(record)
                     if sanitized is None:
                         errors += 1
                         continue
-                    msg_record = MessageRecord(
-                        platform=sanitized["platform"],
-                        message_id=sanitized["message_id"],
-                        session_id=sanitized["session_id"],
-                        group_id=sanitized["group_id"],
-                        channel_id=sanitized["channel_id"],
-                        sender_id=sanitized["sender_id"],
-                        sender_name=sanitized["sender_name"],
-                        message_type=sanitized["message_type"],
-                        message_str=sanitized["message_str"],
-                        message_chain=json.dumps(sanitized["message_chain"]) if sanitized["message_chain"] else None,
-                        raw_message=json.dumps(sanitized["raw_message"]) if sanitized["raw_message"] else None,
-                        reply_to_id=sanitized["reply_to_id"],
-                        timestamp=normalize_timestamp(sanitized["timestamp"]),
-                        created_at=normalize_timestamp(sanitized["created_at"]),
-                    )
+                    msg_record = make_message_record(sanitized)
                     saved_id = await asyncio.wait_for(db.save_message(msg_record), timeout=IMPORT_RECORD_TIMEOUT)
                     if saved_id == -1:
                         skipped += 1
@@ -1266,7 +1294,7 @@ async def _execute_import_task(task_id: str, db: Database, file_path: str, mode:
         task["errors"] = errors
         task["media_restored"] = media_restored
         task["completed_at"] = time.time()
-        _safe_remove_file(file_path)
+        await _safe_remove_file(file_path)
 
         logger.info(f"[MessageRecorder Web] 导入任务 {task_id} 完成: 导入 {imported}, 跳过 {skipped}, 错误 {errors}")
     except Exception as e:
@@ -1328,7 +1356,7 @@ async def cleanup_expired_tasks():
                     expired_tasks.append(task_id)
                     file_path = task.get("file_path")
                     if file_path and os.path.exists(file_path):
-                        _safe_remove_file(file_path)
+                        await _safe_remove_file(file_path)
             for task_id in expired_tasks:
                 _export_tasks.pop(task_id, None)
             if expired_tasks:

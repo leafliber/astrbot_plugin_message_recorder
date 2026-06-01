@@ -616,34 +616,54 @@ class Database:
 
         return stats
 
-    async def cleanup_by_age(self, retention_days: int) -> int:
-        """清理超过保留天数的消息"""
+    async def cleanup_by_age(self, retention_days: int) -> tuple:
+        """清理超过保留天数的消息，返回 (删除数量, 被删记录的媒体路径列表)"""
         if retention_days <= 0:
-            return 0
+            return 0, []
         cutoff_time = int((time.time() - retention_days * 86400) * 1000)
         try:
             async with self._write_lock:
+                cursor = await self._db.execute(
+                    "SELECT message_chain FROM messages WHERE timestamp < ? AND message_chain IS NOT NULL",
+                    (cutoff_time,),
+                )
+                rows = await cursor.fetchall()
+                media_paths = []
+                for row in rows:
+                    media_paths.extend(extract_media_paths(row[0]))
+
                 cursor = await self._db.execute(
                     "DELETE FROM messages WHERE timestamp < ?",
                     (cutoff_time,),
                 )
                 await self._db.commit()
-                return cursor.rowcount
+                return cursor.rowcount, media_paths
         except aiosqlite.Error as e:
             logger.error(f"[MessageRecorder] 按时间清理失败: {e}")
-            return 0
+            return 0, []
 
-    async def cleanup_by_limit(self, max_records: int) -> int:
-        """清理超出数量限制的旧消息"""
+    async def cleanup_by_limit(self, max_records: int) -> tuple:
+        """清理超出数量限制的旧消息，返回 (删除数量, 被删记录的媒体路径列表)"""
         if max_records <= 0:
-            return 0
+            return 0, []
         async with self._write_lock:
             cursor = await self._db.execute("SELECT COUNT(*) FROM messages")
             result = await cursor.fetchone()
             current_count = result[0] if result else 0
             if current_count <= max_records:
-                return 0
+                return 0, []
             delete_count = current_count - max_records
+            cursor = await self._db.execute(
+                "SELECT message_chain FROM messages "
+                "WHERE id IN (SELECT id FROM messages ORDER BY timestamp ASC LIMIT ?) "
+                "AND message_chain IS NOT NULL",
+                (delete_count,),
+            )
+            rows = await cursor.fetchall()
+            media_paths = []
+            for row in rows:
+                media_paths.extend(extract_media_paths(row[0]))
+
             cursor = await self._db.execute("""
                 DELETE FROM messages
                 WHERE id IN (
@@ -651,7 +671,7 @@ class Database:
                 )
             """, (delete_count,))
             await self._db.commit()
-            return cursor.rowcount
+            return cursor.rowcount, media_paths
 
     async def get_timeline_stats(
         self,
@@ -899,3 +919,17 @@ class Database:
         for row in rows:
             paths.extend(extract_media_paths(row[0]))
         return paths
+
+    async def get_unreferenced_media_paths(self, candidates: List[str]) -> List[str]:
+        """从候选路径中筛除仍被数据库引用的，返回可安全删除的路径"""
+        if not candidates:
+            return []
+        unreferenced = []
+        for path in candidates:
+            cursor = await self._db.execute(
+                "SELECT 1 FROM messages WHERE message_chain LIKE ? LIMIT 1",
+                (f"%{path}%",),
+            )
+            if not await cursor.fetchone():
+                unreferenced.append(path)
+        return unreferenced

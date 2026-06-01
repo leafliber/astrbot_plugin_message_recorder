@@ -69,7 +69,7 @@ class MessageRecorder(Star):
             self._api = MessageRecorderAPI(self._db, self._media_downloader)
 
             self._start_cleanup_task()
-            self._register_web_apis()
+            await self._register_web_apis()
             self._web_cleanup_task = asyncio.create_task(cleanup_expired_tasks())
             self._initialized = True
             logger.info("[MessageRecorder] 插件初始化完成")
@@ -140,22 +140,22 @@ class MessageRecorder(Star):
 
         retention_days = self.config.get("retention_days", 30)
         if retention_days > 0:
-            media_paths = await self._db.get_media_paths_before(
-                int((time.time() - retention_days * 86400) * 1000)
-            )
-            result["by_age"] = await self._db.cleanup_by_age(retention_days)
+            deleted, media_paths = await self._db.cleanup_by_age(retention_days)
+            result["by_age"] = deleted
             if self._media_downloader and media_paths:
+                unreferenced = await self._db.get_unreferenced_media_paths(media_paths)
                 result["media_files"] += self._media_downloader.delete_media_files(
-                    media_paths
+                    unreferenced
                 )
 
         max_records = self.config.get("max_records", 100000)
         if max_records > 0:
-            media_paths = await self._db.get_media_paths_over_limit(max_records)
-            result["by_limit"] = await self._db.cleanup_by_limit(max_records)
+            deleted, media_paths = await self._db.cleanup_by_limit(max_records)
+            result["by_limit"] = deleted
             if self._media_downloader and media_paths:
+                unreferenced = await self._db.get_unreferenced_media_paths(media_paths)
                 result["media_files"] += self._media_downloader.delete_media_files(
-                    media_paths
+                    unreferenced
                 )
 
         total = result["by_age"] + result["by_limit"]
@@ -170,9 +170,9 @@ class MessageRecorder(Star):
     def get_api(self) -> Optional[MessageRecorderAPI]:
         return self._api
 
-    def _register_web_apis(self):
+    async def _register_web_apis(self):
         try:
-            register_all_web_apis(self.context, self._db)
+            await register_all_web_apis(self.context, self._db)
             logger.info("[MessageRecorder] Web API 已注册到 AstrBot Dashboard")
         except Exception as e:
             logger.error(f"[MessageRecorder] 注册 Web API 失败: {e}")

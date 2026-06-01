@@ -140,10 +140,6 @@ def extract_media_url(comp_data: dict) -> Optional[str]:
     if isinstance(path_val, str) and path_val.startswith("http"):
         return path_val
 
-    if comp_type == "Image" and file_val and isinstance(file_val, str):
-        if not file_val.startswith("/") and not file_val.startswith("data:"):
-            pass
-
     return None
 
 

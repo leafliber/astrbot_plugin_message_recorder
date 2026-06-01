@@ -347,7 +347,7 @@ class TestCleanup:
         await db.save_message(_make_record(message_id="old", timestamp=old_ts))
         await db.save_message(_make_record(message_id="new"))
 
-        deleted = await db.cleanup_by_age(30)
+        deleted, media_paths = await db.cleanup_by_age(30)
         assert deleted == 1
 
         count = await db.count_messages(QueryFilter())
@@ -358,7 +358,7 @@ class TestCleanup:
         for i in range(10):
             await db.save_message(_make_record(message_id=f"lim_{i}"))
 
-        deleted = await db.cleanup_by_limit(5)
+        deleted, media_paths = await db.cleanup_by_limit(5)
         assert deleted == 5
 
         count = await db.count_messages(QueryFilter())
@@ -366,7 +366,7 @@ class TestCleanup:
 
     @pytest.mark.asyncio
     async def test_cleanup_by_age_zero(self, db):
-        deleted = await db.cleanup_by_age(0)
+        deleted, media_paths = await db.cleanup_by_age(0)
         assert deleted == 0
 
 
