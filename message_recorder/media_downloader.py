@@ -163,7 +163,7 @@ class MediaDownloader:
                 return str(rel_path)
 
             hash_dir.mkdir(parents=True, exist_ok=True)
-            file_path.write_bytes(content)
+            await asyncio.to_thread(file_path.write_bytes, content)
 
             rel_path = file_path.relative_to(self.media_base_path)
             logger.debug(

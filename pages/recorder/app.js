@@ -153,6 +153,11 @@ function getPlatformIcon(platform) {
   return icons[platform] || platform;
 }
 
+function formatMessageType(type) {
+  const labels = { 'group': '群聊', 'private': '私聊', 'channel': '频道', 'forum': '论坛' };
+  return labels[type] || type || '其他';
+}
+
 function escapeHtml(str) {
   if (!str) return '';
   const div = document.createElement('div');
@@ -189,16 +194,12 @@ function parseTimeRangeClient(timeRange) {
       start = new Date(now.getTime() - 30 * 24 * 60 * 60 * 1000);
       end = now;
       break;
-    case 'week': {
-      const dow = now.getDay() || 7;
-      const ws = new Date(now);
-      ws.setDate(now.getDate() - dow + 1);
-      start = new Date(ws.getFullYear(), ws.getMonth(), ws.getDate(), 0, 0, 0);
+    case 'week':
+      start = new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000);
       end = now;
       break;
-    }
     case 'month':
-      start = new Date(now.getFullYear(), now.getMonth(), 1, 0, 0, 0);
+      start = new Date(now.getTime() - 30 * 24 * 60 * 60 * 1000);
       end = now;
       break;
     default:
@@ -210,7 +211,7 @@ function parseTimeRangeClient(timeRange) {
 
 const timeRangeLabels = {
   'today': '今日', 'yesterday': '昨日', 'last7d': '最近7天',
-  'last30d': '最近30天', 'week': '本周', 'month': '本月'
+  'last30d': '最近30天', 'week': '最近7天', 'month': '最近30天'
 };
 
 function formatTimestampStr(ts) {
@@ -745,7 +746,7 @@ function renderMessages(messages) {
       <div class="message-header">
         <span class="message-time">${formatShortTime(msg.timestamp)}</span>
         <span class="message-platform">${getPlatformIcon(msg.platform)}</span>
-        <span class="message-type">${msg.message_type === 'group' ? '群聊' : '私聊'}</span>
+        <span class="message-type">${formatMessageType(msg.message_type)}</span>
         <span class="message-sender">${escapeHtml(msg.sender_name || msg.sender_id)}</span>
       </div>
       <div class="message-content">${escapeHtml(truncate(msg.message_str, 200))}</div>
@@ -827,7 +828,7 @@ async function showMessageDetail(messageId) {
         <div class="detail-row"><span class="detail-label">时间:</span><span class="detail-value">${formatTime(msg.timestamp)}</span></div>
         <div class="detail-row"><span class="detail-label">平台:</span><span class="detail-value">${getPlatformIcon(msg.platform)}</span></div>
         <div class="detail-row"><span class="detail-label">发送者:</span><span class="detail-value">${escapeHtml(msg.sender_name || msg.sender_id)}</span></div>
-        <div class="detail-row"><span class="detail-label">消息类型:</span><span class="detail-value">${msg.message_type === 'group' ? '群聊' : '私聊'}</span></div>
+        <div class="detail-row"><span class="detail-label">消息类型:</span><span class="detail-value">${formatMessageType(msg.message_type)}</span></div>
         ${msg.group_id ? `<div class="detail-row"><span class="detail-label">群组:</span><span class="detail-value">${escapeHtml(msg.group_id)}</span></div>` : ''}
         <div class="detail-row"><span class="detail-label">内容:</span><span class="detail-value">${escapeHtml(msg.message_str) || '[非文本消息]'}</span></div>
       </div>
@@ -913,7 +914,7 @@ function displayExportFilters() {
   const parts = [];
   if (exportFilters.keyword) parts.push(`关键词: ${exportFilters.keyword}`);
   if (exportFilters.platform) parts.push(`平台: ${exportFilters.platform}`);
-  if (exportFilters.message_type) parts.push(`类型: ${exportFilters.message_type === 'group' ? '群聊' : '私聊'}`);
+  if (exportFilters.message_type) parts.push(`类型: ${formatMessageType(exportFilters.message_type)}`);
   el.innerHTML = parts.length ? `<div class="filter-tags">${parts.map(p => `<span class="filter-tag">${p}</span>`).join('')}</div>` : '<p class="text-muted">无筛选条件，将导出全部消息</p>';
 }
 

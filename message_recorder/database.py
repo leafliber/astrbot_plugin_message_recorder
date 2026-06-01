@@ -924,12 +924,25 @@ class Database:
         """从候选路径中筛除仍被数据库引用的，返回可安全删除的路径"""
         if not candidates:
             return []
-        unreferenced = []
-        for path in candidates:
-            cursor = await self._db.execute(
-                "SELECT 1 FROM messages WHERE message_chain LIKE ? LIMIT 1",
-                (f"%{path}%",),
-            )
-            if not await cursor.fetchone():
-                unreferenced.append(path)
-        return unreferenced
+
+        candidate_set = set(candidates)
+        referenced: set = set()
+
+        cursor = await self._db.execute(
+            "SELECT message_chain FROM messages WHERE message_chain IS NOT NULL"
+        )
+
+        found_all = False
+        while not found_all:
+            rows = await cursor.fetchmany(500)
+            if not rows:
+                break
+            for row in rows:
+                for path in extract_media_paths(row[0]):
+                    if path in candidate_set:
+                        referenced.add(path)
+                if referenced >= candidate_set:
+                    found_all = True
+                    break
+
+        return list(candidate_set - referenced)

@@ -169,12 +169,12 @@ class TestComputeContentHash:
         h = compute_content_hash("tg", "s", "u", None, 1700000000000)
         assert len(h) == 16
 
-    def test_timestamp_truncation(self):
+    def test_different_millisecond_same_second(self):
         h1 = compute_content_hash("tg", "s", "u", "m", 1700000000000)
         h2 = compute_content_hash("tg", "s", "u", "m", 1700000000999)
-        assert h1 == h2
+        assert h1 != h2
 
-    def test_different_second_timestamp(self):
+    def test_second_precision_timestamp(self):
         h1 = compute_content_hash("tg", "s", "u", "m", 1700000000000)
         h2 = compute_content_hash("tg", "s", "u", "m", 1700000001000)
         assert h1 != h2

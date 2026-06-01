@@ -146,7 +146,7 @@ def extract_media_url(comp_data: dict) -> Optional[str]:
 def compute_content_hash(platform: str, session_id: str, sender_id: str,
                          message_str: Optional[str], timestamp: int) -> str:
     import hashlib
-    raw = f"{platform}|{session_id}|{sender_id}|{message_str or ''}|{timestamp // 1000}"
+    raw = f"{platform}|{session_id}|{sender_id}|{message_str or ''}|{timestamp}"
     return hashlib.sha256(raw.encode("utf-8")).hexdigest()[:16]
 
 
