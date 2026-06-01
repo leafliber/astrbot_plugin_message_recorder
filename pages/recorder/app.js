@@ -81,7 +81,12 @@ function loadEcharts() {
   return new Promise((resolve, reject) => {
     const script = document.createElement('script');
     script.src = 'https://cdn.jsdelivr.net/npm/echarts@5/dist/echarts.min.js';
-    script.onload = () => { echartsLoaded = true; echartsLoading = false; resolve(); };
+    script.onload = () => {
+      echartsLoaded = true;
+      echartsLoading = false;
+      window.addEventListener('resize', handleChartResize);
+      resolve();
+    };
     script.onerror = () => { echartsLoading = false; reject(new Error('ECharts 加载失败')); };
     document.head.appendChild(script);
   });
@@ -353,6 +358,15 @@ function clearStatSkeleton(id) {
 
 function clearChartSkeleton(id) {
   const el = document.getElementById(id);
+  const chartMap = { timelineChart, platformChart, senderChart, groupChart };
+  const instance = chartMap[id];
+  if (instance) {
+    instance.dispose();
+    if (id === 'timelineChart') timelineChart = null;
+    else if (id === 'platformChart') platformChart = null;
+    else if (id === 'senderChart') senderChart = null;
+    else if (id === 'groupChart') groupChart = null;
+  }
   if (el) {
     el.classList.remove('loading');
     el.innerHTML = '';
@@ -468,27 +482,21 @@ function updateTimeRangeDisplay(timeRange) {
   el.innerHTML = `<span class="time-range-label">${label}</span> <span class="time-range-separator">|</span> <span class="time-range-value">${formatTimestampStr(start)} ~ ${formatTimestampStr(end)}</span>`;
 }
 
-function initCharts() {
-  const make = (id) => {
-    const el = document.getElementById(id);
-    return el ? echarts.init(el) : null;
-  };
-  if (!timelineChart) timelineChart = make('timelineChart');
-  if (!platformChart) platformChart = make('platformChart');
-  if (!senderChart) senderChart = make('senderChart');
-  if (!groupChart) groupChart = make('groupChart');
+function ensureChart(id) {
+  const el = document.getElementById(id);
+  return el ? echarts.init(el) : null;
+}
 
-  window.addEventListener('resize', () => {
-    timelineChart?.resize();
-    platformChart?.resize();
-    senderChart?.resize();
-    groupChart?.resize();
-  });
+function handleChartResize() {
+  timelineChart?.resize();
+  platformChart?.resize();
+  senderChart?.resize();
+  groupChart?.resize();
 }
 
 function updateTimelineChart(points) {
   if (!echartsLoaded) return;
-  initCharts();
+  if (!timelineChart) timelineChart = ensureChart('timelineChart');
   if (!timelineChart || !points?.length) return;
 
   timelineChart.setOption({
@@ -507,7 +515,7 @@ function updateTimelineChart(points) {
 
 function updatePlatformChart(platformStats) {
   if (!echartsLoaded) return;
-  initCharts();
+  if (!platformChart) platformChart = ensureChart('platformChart');
   if (!platformChart || !platformStats) return;
 
   const data = Object.entries(platformStats).map(([name, value]) => ({
@@ -531,7 +539,7 @@ function updatePlatformChart(platformStats) {
 
 function updateSenderChart(senders) {
   if (!echartsLoaded) return;
-  initCharts();
+  if (!senderChart) senderChart = ensureChart('senderChart');
   if (!senderChart || !senders?.length) return;
 
   senderChart.setOption({
@@ -545,7 +553,7 @@ function updateSenderChart(senders) {
 
 function updateGroupChart(groups) {
   if (!echartsLoaded) return;
-  initCharts();
+  if (!groupChart) groupChart = ensureChart('groupChart');
   if (!groupChart || !groups?.length) return;
 
   groupChart.setOption({
