@@ -2,10 +2,15 @@
 
 from typing import Optional, Dict, Type
 from astrbot.api import logger
+from astrbot.core.platform.message_type import MessageType
 
 
 class PlatformAdapter:
-    """平台适配器基类"""
+    """平台适配器基类
+
+    使用 AstrBot 已提供的 message_obj.type (MessageType) 来判断消息类型，
+    而非通过 group_id 猜测。
+    """
 
     PLATFORM_NAME: str = "generic"
 
@@ -37,9 +42,12 @@ class PlatformAdapter:
         return str(raw_message_id).strip()[:128]
 
     def determine_message_type(self, message_obj) -> str:
-        if message_obj.group_id:
+        msg_type = getattr(message_obj, 'type', None)
+        if msg_type == MessageType.GROUP_MESSAGE:
             return "group"
-        return "private"
+        if msg_type == MessageType.FRIEND_MESSAGE:
+            return "private"
+        return "other"
 
     def extract_media_url(self, component, comp_data: dict) -> Optional[str]:
         from .serializer import extract_media_url
@@ -63,57 +71,49 @@ class TelegramAdapter(PlatformAdapter):
             return str(raw_message_id).strip()[:128]
 
 
-class DiscordAdapter(PlatformAdapter):
-    PLATFORM_NAME = "discord"
+class ChannelBasedAdapter(PlatformAdapter):
+    """Channel-based 平台适配器
+
+    适用于 group_id 代表 channel（而非传统群聊）的平台。
+    GROUP_MESSAGE 记录为 "channel" 类型，extract_channel_id 从 group_id 提取。
+    """
+
+    def determine_message_type(self, message_obj) -> str:
+        msg_type = getattr(message_obj, 'type', None)
+        if msg_type == MessageType.GROUP_MESSAGE:
+            return "channel"
+        if msg_type == MessageType.FRIEND_MESSAGE:
+            return "private"
+        return "other"
 
     def extract_channel_id(self, message_obj) -> Optional[str]:
-        if hasattr(message_obj, "channel_id") and message_obj.channel_id:
-            return str(message_obj.channel_id)
+        if message_obj.group_id:
+            return str(message_obj.group_id)
         return None
-
-    def normalize_channel_id(self, raw_channel_id: Optional[str]) -> Optional[str]:
-        if not raw_channel_id:
-            return None
-        cid = str(raw_channel_id).strip()
-        return cid[:128] if cid else None
-
-    def determine_message_type(self, message_obj) -> str:
-        if message_obj.group_id:
-            group_id = str(message_obj.group_id)
-            if group_id.startswith("channel_") or group_id.startswith("dm_"):
-                return "private"
-            return "channel"
-        return "private"
-
-
-class QQOfficialAdapter(PlatformAdapter):
-    PLATFORM_NAME = "qq_official"
-
-    def determine_message_type(self, message_obj) -> str:
-        if message_obj.group_id:
-            return "group"
-        return "private"
-
-
-class QQPrivateAdapter(QQOfficialAdapter):
-    PLATFORM_NAME = "qq_private"
-
-
-class WechatAdapter(PlatformAdapter):
-    PLATFORM_NAME = "wechat"
-
-    def normalize_message_id(self, raw_message_id: Optional[str]) -> str:
-        if not raw_message_id:
-            return ""
-        return str(raw_message_id).strip()[:128]
 
 
 _ADAPTER_REGISTRY: Dict[str, Type[PlatformAdapter]] = {
+    # Telegram - numeric message_id
     "telegram": TelegramAdapter,
-    "discord": DiscordAdapter,
-    "qq_official": QQOfficialAdapter,
-    "qq_private": QQPrivateAdapter,
-    "wechat": WechatAdapter,
+    # Channel-based platforms
+    "discord": ChannelBasedAdapter,
+    "slack": ChannelBasedAdapter,
+    "mattermost": ChannelBasedAdapter,
+    "kook": ChannelBasedAdapter,
+    # 标准群聊/私聊平台
+    "aiocqhttp": PlatformAdapter,
+    "qq_official": PlatformAdapter,
+    "qq_official_webhook": PlatformAdapter,
+    "dingtalk": PlatformAdapter,
+    "lark": PlatformAdapter,
+    "wecom": PlatformAdapter,
+    "wecom_ai_bot": PlatformAdapter,
+    "weixin_oc": PlatformAdapter,
+    "weixin_official_account": PlatformAdapter,
+    "line": PlatformAdapter,
+    "misskey": PlatformAdapter,
+    "satori": PlatformAdapter,
+    "webchat": PlatformAdapter,
 }
 
 _generic_adapter = PlatformAdapter()

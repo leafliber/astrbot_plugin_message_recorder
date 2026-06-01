@@ -2,13 +2,12 @@
 
 import pytest
 
+from astrbot.core.platform.message_type import MessageType
+
 from astrbot_plugin_message_recorder.message_recorder.platform_adapter import (
     PlatformAdapter,
     TelegramAdapter,
-    DiscordAdapter,
-    QQOfficialAdapter,
-    QQPrivateAdapter,
-    WechatAdapter,
+    ChannelBasedAdapter,
     get_adapter,
     register_adapter,
     _ADAPTER_REGISTRY,
@@ -18,6 +17,7 @@ from astrbot_plugin_message_recorder.message_recorder.platform_adapter import (
 
 class MockMessageObj:
     def __init__(self, **kwargs):
+        self.type = kwargs.pop("type", None)
         self.group_id = kwargs.pop("group_id", None)
         self.__dict__.update(kwargs)
 
@@ -75,12 +75,20 @@ class TestPlatformAdapter:
         assert len(result) == 128
 
     def test_determine_message_type_group(self):
-        msg = MockMessageObj(group_id="grp1")
+        msg = MockMessageObj(type=MessageType.GROUP_MESSAGE, group_id="grp1")
         assert self.adapter.determine_message_type(msg) == "group"
 
     def test_determine_message_type_private(self):
-        msg = MockMessageObj()
+        msg = MockMessageObj(type=MessageType.FRIEND_MESSAGE)
         assert self.adapter.determine_message_type(msg) == "private"
+
+    def test_determine_message_type_other(self):
+        msg = MockMessageObj(type=MessageType.OTHER_MESSAGE)
+        assert self.adapter.determine_message_type(msg) == "other"
+
+    def test_determine_message_type_fallback(self):
+        msg = MockMessageObj()
+        assert self.adapter.determine_message_type(msg) == "other"
 
     def test_extract_reply_to_id(self):
         comp = object()
@@ -115,74 +123,33 @@ class TestTelegramAdapter:
         assert self.adapter.normalize_message_id(None) == ""
 
 
-class TestDiscordAdapter:
+class TestChannelBasedAdapter:
     def setup_method(self):
-        self.adapter = DiscordAdapter()
-
-    def test_platform_name(self):
-        assert self.adapter.PLATFORM_NAME == "discord"
-
-    def test_extract_channel_id(self):
-        msg = MockMessageObj(channel_id="987654")
-        assert self.adapter.extract_channel_id(msg) == "987654"
-
-    def test_extract_channel_id_missing(self):
-        msg = MockMessageObj()
-        assert self.adapter.extract_channel_id(msg) is None
-
-    def test_extract_channel_id_empty(self):
-        msg = MockMessageObj(channel_id="")
-        assert self.adapter.extract_channel_id(msg) is None
+        self.adapter = ChannelBasedAdapter()
 
     def test_determine_message_type_channel(self):
-        msg = MockMessageObj(group_id="123456")
+        msg = MockMessageObj(type=MessageType.GROUP_MESSAGE, group_id="123456")
         assert self.adapter.determine_message_type(msg) == "channel"
 
-    def test_determine_message_type_channel_prefix(self):
-        msg = MockMessageObj(group_id="channel_123")
-        assert self.adapter.determine_message_type(msg) == "private"
-
-    def test_determine_message_type_dm_prefix(self):
-        msg = MockMessageObj(group_id="dm_123")
-        assert self.adapter.determine_message_type(msg) == "private"
-
     def test_determine_message_type_private(self):
-        msg = MockMessageObj()
+        msg = MockMessageObj(type=MessageType.FRIEND_MESSAGE)
         assert self.adapter.determine_message_type(msg) == "private"
 
+    def test_determine_message_type_other(self):
+        msg = MockMessageObj(type=MessageType.OTHER_MESSAGE)
+        assert self.adapter.determine_message_type(msg) == "other"
 
-class TestQQOfficialAdapter:
-    def setup_method(self):
-        self.adapter = QQOfficialAdapter()
+    def test_extract_channel_id(self):
+        msg = MockMessageObj(type=MessageType.GROUP_MESSAGE, group_id="987654")
+        assert self.adapter.extract_channel_id(msg) == "987654"
 
-    def test_platform_name(self):
-        assert self.adapter.PLATFORM_NAME == "qq_official"
+    def test_extract_channel_id_no_group(self):
+        msg = MockMessageObj(type=MessageType.FRIEND_MESSAGE)
+        assert self.adapter.extract_channel_id(msg) is None
 
-    def test_determine_message_type_group(self):
-        msg = MockMessageObj(group_id="grp1")
-        assert self.adapter.determine_message_type(msg) == "group"
-
-    def test_determine_message_type_private(self):
-        msg = MockMessageObj()
-        assert self.adapter.determine_message_type(msg) == "private"
-
-
-class TestQQPrivateAdapter:
-    def test_platform_name(self):
-        assert QQPrivateAdapter.PLATFORM_NAME == "qq_private"
-
-
-class TestWechatAdapter:
-    def setup_method(self):
-        self.adapter = WechatAdapter()
-
-    def test_platform_name(self):
-        assert self.adapter.PLATFORM_NAME == "wechat"
-
-    def test_normalize_message_id(self):
-        assert self.adapter.normalize_message_id("msg1") == "msg1"
-        assert self.adapter.normalize_message_id("") == ""
-        assert self.adapter.normalize_message_id(None) == ""
+    def test_extract_channel_id_empty_group(self):
+        msg = MockMessageObj(type=MessageType.GROUP_MESSAGE, group_id="")
+        assert self.adapter.extract_channel_id(msg) is None
 
 
 class TestGetAdapter:
@@ -193,9 +160,19 @@ class TestGetAdapter:
         adapter = get_adapter("telegram")
         assert isinstance(adapter, TelegramAdapter)
 
-    def test_discord_platform(self):
+    def test_channel_based_platform(self):
         adapter = get_adapter("discord")
-        assert isinstance(adapter, DiscordAdapter)
+        assert isinstance(adapter, ChannelBasedAdapter)
+
+    def test_standard_platform(self):
+        adapter = get_adapter("aiocqhttp")
+        assert isinstance(adapter, PlatformAdapter)
+        assert not isinstance(adapter, (TelegramAdapter, ChannelBasedAdapter))
+
+    def test_all_registered_platforms(self):
+        for name in _ADAPTER_REGISTRY:
+            adapter = get_adapter(name)
+            assert adapter is not None
 
     def test_unknown_platform(self):
         adapter = get_adapter("unknown_platform")

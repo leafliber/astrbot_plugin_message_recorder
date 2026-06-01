@@ -3,10 +3,10 @@
 # 📝 AstrBot 消息记录器
 
 [![AstrBot](https://img.shields.io/badge/AstrBot-%3E4.16%2C%3C5-blue?style=for-the-badge)](https://github.com/Soulter/astrbot)
-[![Python](https://img.shields.io/badge/Python-3.10+-green?style=for-the-badge)](https://www.python.org/)
+[![Python](https://img.shields.io/badge/Python-3.12+-green?style=for-the-badge)](https://www.python.org/)
 [![License](https://img.shields.io/badge/License-AGPL--3.0-blue?style=for-the-badge)](LICENSE)
 
-**多平台消息记录插件 | SQLite 存储 | Web 管理面板 | 丰富查询 API**
+**全平台聊天消息自动记录 | SQLite 存储 | Web 管理面板 | 全文搜索 | 插件 API**
 
 ![](https://count.getloli.com/get/@astrbot-plugin-message-recorder?theme=moebooru-h)
 
@@ -14,33 +14,75 @@
 
 ---
 
+## 为什么选择消息记录器？
+
+> **安装即用，零配置起步** — 插件会自动记录经过 AstrBot 的每一条消息，无需任何手动操作。需要更多功能时再按需开启。
+
+- 聊天记录随时间流逝再也找不回来？群聊中重要的讨论沉入消息海洋？
+- 管理多个平台的机器人，希望统一归档所有对话？
+- 想在自己的插件中查询历史消息，却不想自己写数据库层？
+
+**消息记录器** 就是为此而生 —— 装上就忘，需要时随时搜索、导出、分析。
+
+---
+
 ## ✨ 功能特色
 
-- 🔥 **全平台支持** - 支持 Telegram、Discord、QQ 官方/私有、微信等所有 AstrBot 接入的平台
-- 💾 **SQLite 存储** - 轻量级本地数据库，WAL 模式，开箱即用
-- 📊 **完整记录** - 保存消息文本、发送者、群组/频道、时间戳、消息链、回复关系等完整信息
-- 🖼️ **多媒体保存** - 可选保存图片、语音、视频、文件到本地，支持原图/缩略图模式，内容哈希自动去重
-- 🌐 **Web 管理面板** - 基于 AstrBot Plugin Pages 的可视化面板，骨架屏渐进式加载，内嵌于 Dashboard
-- 🔍 **多维查询** - 支持按平台、发送者、群组、频道、时间范围、关键词、回复关系等多维度组合查询
-- 📤 **数据导入导出** - 支持 JSON/CSV/MRPKG 格式导出，大文件分片上传导入，含媒体文件打包
-- 🔌 **API 接口** - 提供完整 API 供其他插件调用，支持分页、统计、上下文查询
-- 🧹 **自动清理** - 可配置保留天数和最大记录数，自动清理过期数据和孤立媒体文件
-- ⚡ **异步高效** - 使用 aiosqlite 异步操作，并发下载控制，不影响消息处理性能
+- 🌐 **18 平台全覆盖** — 支持 AstrBot 接入的全部 18 个平台：Telegram、QQ（aiocqhttp / QQ 官方）、Discord、Slack、钉钉、飞书、企业微信、微信公众号、LINE、Misskey、Mattermost、Kook、Satori、WebChat 等
+- 💾 **零配置 SQLite** — 轻量级本地数据库，WAL 模式，开箱即用，无需额外安装数据库服务
+- 📊 **完整记录** — 保存消息文本、发送者、群组/频道、时间戳、消息链、回复关系等完整信息
+- 🖼️ **多媒体归档** — 可选保存图片、语音、视频、文件到本地，支持原图/缩略图模式，内容哈希自动去重（相同文件只存一份）
+- 🌐 **Web 管理面板** — 内嵌于 AstrBot Dashboard，提供统计图表、消息搜索、数据导入导出，无需额外部署
+- 🔍 **全文搜索** — 基于 SQLite FTS5，支持消息内容关键词搜索和多维度组合筛选
+- 📤 **数据导入导出** — 支持 JSON / CSV / MRPKG（含媒体文件打包）格式，可跨实例迁移
+- 🔌 **插件 API** — 提供 `query()` / `count()` / `search()` 等完整查询接口，其他插件一行代码即可调用
+- 🧹 **自动清理** — 可配置保留天数和最大记录数，自动清理过期数据和孤立媒体文件
+- ⚡ **异步高性能** — 全链路异步（aiosqlite + aiohttp），并发控制，不影响消息处理性能
+- 🔒 **智能去重** — 基于 `(platform, message_id)` 和 `(platform, content_hash)` 双唯一索引，同一消息不会重复入库
+
+---
+
+## 📱 支持的平台
+
+插件已适配 AstrBot 注册的全部 18 个平台，按类型分组：
+
+| 类型 | 平台 |
+|------|------|
+| **即时通讯** | Telegram、LINE、WebChat |
+| **QQ** | aiocqhttp（OneBot）、QQ 官方、QQ 官方 Webhook |
+| **企业协作** | 钉钉、飞书、企业微信、企业微信 AI 助手 |
+| **频道 / 社区** | Discord、Slack、Mattermost、Kook |
+| **微信公众号** | 微信开放平台、微信公众号 |
+| **联邦宇宙** | Misskey、Satori |
+
+> 未列出的平台也不会丢失消息 —— 插件会自动回退到通用适配器，确保所有经过 AstrBot 的消息都能被记录。
+
+---
+
+## 🎯 适用场景
+
+- **群聊存档** — 自动记录所有群聊、私聊消息，随时回溯历史讨论
+- **跨平台汇总** — 同时管理 Telegram、QQ、Discord 等多个平台？所有消息统一存储，一处查询
+- **数据分析** — 统计各平台活跃度、发送者排行、群组热度，用数据驱动运营决策
+- **合规审计** — 保留完整的聊天记录用于审核，支持按时间、发送者、关键词检索
+- **插件开发** — 在你自己的插件中查询历史消息上下文，构建更智能的回复逻辑
+- **数据迁移** — 导出消息和媒体文件，在新实例上一键导入，无缝迁移
 
 ---
 
 ## 📦 安装
 
-### 方式一：插件市场
+### 方式一：插件市场（推荐）
 
-在 AstrBot WebUI 的插件市场中搜索「消息记录器」并安装
+在 AstrBot WebUI 的 **插件市场** 中搜索「**消息记录器**」并一键安装
 
 ### 方式二：手动安装
 
-将本仓库克隆或下载到 AstrBot 的插件目录：
+将本仓库克隆到 AstrBot 的插件目录：
 
-```
-AstrBot/data/plugins/astrbot_plugin_message_recorder/
+```bash
+cd AstrBot/data/plugins/
+git clone https://github.com/leafliber/astrbot_plugin_message_recorder.git
 ```
 
 然后在 AstrBot WebUI 的「插件管理」页面点击「重载插件」
@@ -54,13 +96,15 @@ AstrBot/data/plugins/astrbot_plugin_message_recorder/
 | 配置项 | 默认值 | 说明 |
 |--------|--------|------|
 | `enable_commands` | `true` | 是否启用消息记录指令 |
-| `max_records` | `0` | 最大消息记录数，超过时自动清理最旧记录（0 表示不限制） |
-| `retention_days` | `0` | 消息保留天数，超过此天数自动清理（0 表示永久保留） |
+| `max_records` | `0` | 最大消息记录数，超过时自动清理最旧记录（0 = 不限制） |
+| `retention_days` | `0` | 消息保留天数，超过此天数自动清理（0 = 永久保留） |
 | `save_message_chain` | `true` | 是否保存完整消息链（包含图片、表情等） |
 | `save_raw_message` | `false` | 是否保存平台原始消息对象 |
 | `cleanup_interval_hours` | `24` | 自动清理间隔（小时） |
-| `save_media_files` | `false` | 是否保存多媒体文件（图片、语音、视频、文件）到本地 |
-| `image_save_mode` | `original` | 图片保存模式：`original` 保存原图，`thumbnail` 保存缩略图 |
+| `save_media_files` | `false` | 是否保存多媒体文件到本地 |
+| `image_save_mode` | `original` | 图片保存模式：`original`（原图）/ `thumbnail`（缩略图） |
+
+> **提示**：首次使用建议保持默认配置。如需永久保存媒体文件（QQ 等平台的图片链接有时效性），请开启 `save_media_files`。
 
 ---
 
@@ -70,22 +114,21 @@ AstrBot/data/plugins/astrbot_plugin_message_recorder/
 
 ### 仪表盘
 
-- **统计卡片** - 总消息数、群聊消息、私聊消息、平台数，交错动画展示
-- **时间趋势图** - 消息数量随时间变化的趋势（ECharts 按需懒加载）
-- **平台分布图** - 各平台消息占比饼图
-- **发送者排行** - 消息发送量排名
-- **群组排行** - 群组活跃度排名
-- **时间范围切换** - 支持今日/近7天/近30天/近90天/全部
+- **统计卡片** — 总消息数、群聊消息、私聊消息、平台数
+- **时间趋势图** — 消息数量随时间变化的趋势
+- **平台分布图** — 各平台消息占比饼图
+- **发送者排行** — 消息发送量排名
+- **群组排行** — 群组活跃度排名
+- **时间范围切换** — 今日 / 近 7 天 / 近 30 天 / 近 90 天 / 全部
 
-> 仪表盘采用渐进式渲染策略：各区域独立骨架屏加载，数据到达后即时填充，无需等待全部数据。
+> 仪表盘采用渐进式渲染：各区域独立骨架屏加载，数据到达后即时填充。
 
 ### 消息搜索
 
 - 多条件组合搜索（平台、群组、发送者、时间范围、关键词）
 - 高级筛选（频道、消息类型、回复消息）
 - 分页浏览历史消息
-- 查看消息详情（模态内联加载）
-- 查看消息上下文
+- 查看消息详情和上下文
 - 搜索结果可一键跳转导出
 
 ### 数据导出
@@ -99,22 +142,19 @@ AstrBot/data/plugins/astrbot_plugin_message_recorder/
 导出功能特性：
 - 按条件筛选导出，复用搜索条件
 - 异步后台处理，不阻塞操作
-- 实时进度反馈（消息处理进度 + 媒体文件收集进度）
-- 小文件 base64 直接下载，大文件通过 Dashboard 桥接下载
-- MRPKG 格式包含完整媒体文件，支持跨实例迁移
+- 实时进度反馈
+- MRPKG 格式支持跨实例迁移
 
 ### 数据导入
 
-- 支持 JSON、CSV、MRPKG 格式导入
-- 小文件（≤50MB）直接上传，大文件自动分片上传（5MB/片）
-- 分片上传实时进度显示
+- 支持 JSON、CSV、MRPKG 格式
+- 小文件（≤50MB）直接上传，大文件自动分片上传
 - 两种导入模式：合并（添加新记录）/ 跳过重复（检测并跳过已存在记录）
-- 导入进度实时轮询显示
 - MRPKG 格式自动还原媒体文件
 
 ---
 
-## 📱 指令使用
+## 💬 指令使用
 
 > 指令功能可通过配置项 `enable_commands` 启用或禁用，默认启用。
 
@@ -235,7 +275,6 @@ message = await mr_api.get_by_platform_message_id("12345678", platform="telegram
 
 # 上下文
 context_messages = await mr_api.get_context(message_id=123, before=5, after=5)
-# 返回 {"before": [...], "after": [...]}
 
 # 回复
 replies = await mr_api.get_replies("12345678", platform="telegram")
@@ -270,17 +309,6 @@ stats = await mr_api.get_stats()
 | `offset` | int | 偏移量（分页） |
 | `order` | str | `desc` 倒序，`asc` 正序 |
 
-### time 参数格式
-
-| 格式 | 示例 | 说明 |
-|------|------|------|
-| 自然语言 | `today`、`yesterday`、`week`、`month` | 预设时间范围 |
-| 天数范围 | `last7d`、`last30d`、`last3d` | 最近 N 天 |
-| 小时范围 | `last1h`、`last3h`、`last12h` | 最近 N 小时 |
-| 具体日期 | `2024-01-15` | 指定日期 |
-| 日期范围 | `2024-01-01~2024-01-15` | 日期范围 |
-| 相对时间 | `-1d`、`-7d`、`-3h` | N 天/小时前 |
-
 ### MessageRecord 数据结构
 
 ```python
@@ -308,6 +336,40 @@ message.to_dict()                        # 转为字典
 message.get_message_chain_list()         # 解析消息链为列表
 message.get_raw_message_dict()           # 解析原始消息为字典
 ```
+
+---
+
+## 🖼️ 媒体文件 API
+
+### 其他插件获取媒体文件
+
+```python
+mr_api = await get_message_recorder_api(context)
+
+messages = await mr_api.query(limit=10)
+
+for msg in messages:
+    media_paths = mr_api.extract_media_paths(msg)
+
+    for rel_path in media_paths:
+        # 获取绝对路径（文件不存在返回 None）
+        abs_path = mr_api.get_media_absolute_path(rel_path)
+        if abs_path:
+            with open(abs_path, "rb") as f:
+                image_data = f.read()
+
+        # 获取 Web 访问 URL
+        web_url = mr_api.get_media_url(rel_path)
+```
+
+### 媒体相关 API 方法
+
+| 方法 | 说明 |
+|------|------|
+| `get_media_base_path()` | 获取媒体文件存储根目录的绝对路径 |
+| `get_media_absolute_path(rel_path)` | 获取媒体文件的绝对路径（不存在返回 None） |
+| `get_media_url(rel_path)` | 获取媒体文件的 Web 访问 URL |
+| `extract_media_paths(message)` | 从消息记录中提取所有媒体文件的相对路径 |
 
 ---
 
@@ -364,65 +426,9 @@ data/plugin_data/astrbot_plugin_message_recorder/media/
 ```
 
 **存储策略：**
-
 - 文件名使用**内容 SHA256 哈希**（取前16位），相同内容只保存一份
-- 目录按哈希前2位分组，避免单目录文件过多，同时确保跨时间段的相同文件不会重复存储
+- 目录按哈希前2位分组，避免单目录文件过多
 - 文件名示例：`a1b2c3d4e5f6g7h8.jpg`
-
----
-
-## 🖼️ 媒体文件 API
-
-### 其他插件获取媒体文件
-
-```python
-mr_api = await get_message_recorder_api(context)
-
-messages = await mr_api.query(limit=10)
-
-for msg in messages:
-    media_paths = mr_api.extract_media_paths(msg)
-
-    for rel_path in media_paths:
-        # 获取绝对路径（文件不存在返回 None）
-        abs_path = mr_api.get_media_absolute_path(rel_path)
-        if abs_path:
-            with open(abs_path, "rb") as f:
-                image_data = f.read()
-
-        # 获取 Web 访问 URL
-        web_url = mr_api.get_media_url(rel_path)
-```
-
-### 媒体相关 API 方法
-
-| 方法 | 说明 |
-|------|------|
-| `get_media_base_path()` | 获取媒体文件存储根目录的绝对路径 |
-| `get_media_absolute_path(rel_path)` | 获取媒体文件的绝对路径（文件不存在返回 None） |
-| `get_media_url(rel_path)` | 获取媒体文件的 Web 访问 URL |
-| `extract_media_paths(message)` | 从消息记录中提取所有媒体文件的相对路径 |
-
-### Web API 访问媒体
-
-```
-GET /message_recorder/api/media/{relative_path}
-```
-
-消息详情 API 返回的 `message_chain` 中会自动包含 `media_url` 字段：
-
-```json
-{
-  "message_chain": [
-    {
-      "type": "Image",
-      "url": "https://example.com/image.jpg",
-      "local_path": "images/a1/a1b2c3d4e5f6g7h8.jpg",
-      "media_url": "/message_recorder/api/media/images/a1/a1b2c3d4e5f6g7h8.jpg"
-    }
-  ]
-}
-```
 
 ---
 
@@ -468,7 +474,7 @@ astrbot_plugin_message_recorder/
 │   ├── database.py          # SQLite 数据库操作
 │   ├── media_downloader.py  # 多媒体文件下载
 │   ├── models.py            # 数据模型定义
-│   ├── platform_adapter.py  # 平台适配器
+│   ├── platform_adapter.py  # 平台适配器（18 个平台）
 │   ├── serializer.py        # 消息链序列化
 │   ├── time_utils.py        # 时间工具
 │   └── web_api.py           # Web API 注册
@@ -491,18 +497,16 @@ astrbot_plugin_message_recorder/
 3. 启动 AstrBot，在 WebUI 重载插件
 4. 修改代码后点击「重载」即可热更新
 
-### 代码格式化
-
-提交前请使用 `ruff` 格式化代码：
-
-```bash
-ruff format .
-```
-
 ### 运行测试
 
 ```bash
 python3 -m pytest tests/ -v
+```
+
+### 代码格式化
+
+```bash
+ruff format .
 ```
 
 ---
@@ -521,7 +525,7 @@ python3 -m pytest tests/ -v
 
 <div align="center">
 
-**⭐ 如果这个插件对你有帮助，请给个 Star 支持！**
+**如果这个插件对你有帮助，请给个 Star 支持！**
 
 ![](https://count.getloli.com/get/@astrbot-plugin-message-recorder?theme=moebooru-h&mute=1)
 
