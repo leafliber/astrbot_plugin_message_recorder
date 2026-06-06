@@ -989,24 +989,6 @@ class _StreamingJsonWriter:
                 f.write(content.replace('__PLACEHOLDER__', str(self._count), 1))
 
 
-def _write_csv_export(file_path: Path, records: list) -> Path:
-    with open(file_path, "w", encoding="utf-8", newline="") as f:
-        writer = csv.writer(f)
-        writer.writerow([
-            "id", "platform", "sender_id", "sender_name", "group_id",
-            "channel_id", "message_type", "message_str", "reply_to_id",
-            "timestamp", "created_at",
-        ])
-        for msg in records:
-            writer.writerow([
-                msg.id, msg.platform, msg.sender_id, msg.sender_name or "",
-                msg.group_id or "", msg.channel_id or "", msg.message_type,
-                msg.message_str or "", msg.reply_to_id or "", msg.timestamp,
-                msg.created_at,
-            ])
-    return file_path
-
-
 def _write_media_zip_from_file(pkg_path: Path, json_path: Path,
                                media_files: dict, media_base: Path,
                                task: dict) -> int:

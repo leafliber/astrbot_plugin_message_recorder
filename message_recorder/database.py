@@ -10,7 +10,7 @@ from typing import Optional, List, Dict, Any
 from astrbot.core.utils.astrbot_path import get_astrbot_plugin_data_path
 from astrbot.api import logger
 
-from .models import MessageRecord, QueryFilter, MessageStats
+from .models import MessageRecord, QueryFilter, MessageStats, SCHEMA_VERSION
 from .time_utils import parse_time_range
 from .serializer import compute_content_hash, extract_media_paths
 
