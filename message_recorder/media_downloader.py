@@ -227,12 +227,24 @@ class MediaDownloader:
                 return False
             if file_path.exists() and file_path.is_file():
                 file_path.unlink()
+                self._cleanup_empty_parents(file_path.parent)
                 logger.debug(f"[MediaDownloader] 已删除媒体文件: {relative_path}")
                 return True
             return False
         except Exception as e:
             logger.warning(f"[MediaDownloader] 删除媒体文件失败: {e}")
             return False
+
+    def _cleanup_empty_parents(self, dir_path: Path) -> None:
+        """向上清理因文件删除而产生的空目录，停在 media_base_path"""
+        try:
+            while dir_path != self.media_base_path and dir_path.is_dir():
+                if any(dir_path.iterdir()):
+                    break
+                dir_path.rmdir()
+                dir_path = dir_path.parent
+        except OSError:
+            pass
 
     def delete_media_files(self, relative_paths: List[str]) -> int:
         deleted = 0

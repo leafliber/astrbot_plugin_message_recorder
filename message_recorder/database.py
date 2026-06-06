@@ -52,6 +52,7 @@ class Database:
         self.db_path: Optional[Path] = None
         self._db: Optional[aiosqlite.Connection] = None
         self._write_lock = asyncio.Lock()
+        self._fts_available_cache: Optional[bool] = None
     async def init(self) -> None:
         """初始化数据库"""
         data_path = Path(get_astrbot_plugin_data_path())
@@ -62,6 +63,7 @@ class Database:
         self._db = await aiosqlite.connect(self.db_path)
         await self._db.execute("PRAGMA journal_mode=WAL")
         await self._create_tables()
+        await self._ensure_schema_version()
         logger.info(f"[MessageRecorder] 数据库初始化完成: {self.db_path}")
 
     async def close(self) -> None:
@@ -116,6 +118,10 @@ class Database:
             """CREATE UNIQUE INDEX IF NOT EXISTS idx_platform_content_hash_unique
                ON messages(platform, content_hash)
                WHERE content_hash IS NOT NULL""",
+            # 复合索引：覆盖常见查询模式
+            "CREATE INDEX IF NOT EXISTS idx_platform_group_timestamp ON messages(platform, group_id, timestamp)",
+            "CREATE INDEX IF NOT EXISTS idx_platform_sender_timestamp ON messages(platform, sender_id, timestamp)",
+            "CREATE INDEX IF NOT EXISTS idx_type_timestamp ON messages(message_type, timestamp)",
         ]
         for index_sql in indexes:
             await self._db.execute(index_sql)
@@ -166,6 +172,38 @@ class Database:
             except Exception as e:
                 logger.warning(
                     f"[MessageRecorder] 创建 FTS5 索引失败: {e}"
+                )
+
+    async def _ensure_schema_version(self) -> None:
+        """检查并执行 schema 迁移"""
+        async with self._write_lock:
+            await self._db.execute("""
+                CREATE TABLE IF NOT EXISTS _schema_meta (
+                    key TEXT PRIMARY KEY,
+                    value TEXT NOT NULL
+                )
+            """)
+            cursor = await self._db.execute(
+                "SELECT value FROM _schema_meta WHERE key = 'schema_version'"
+            )
+            row = await cursor.fetchone()
+            current_version = int(row[0]) if row else 0
+
+            if current_version < SCHEMA_VERSION:
+                for version in range(current_version + 1, SCHEMA_VERSION + 1):
+                    migration = _SCHEMA_MIGRATIONS.get(version)
+                    if migration:
+                        logger.info(
+                            f"[MessageRecorder] 执行 schema 迁移: {current_version} → {version}"
+                        )
+                        await migration(self._db)
+                await self._db.execute(
+                    "INSERT OR REPLACE INTO _schema_meta (key, value) VALUES ('schema_version', ?)",
+                    (str(SCHEMA_VERSION),),
+                )
+                await self._db.commit()
+                logger.info(
+                    f"[MessageRecorder] Schema 版本已更新至 {SCHEMA_VERSION}"
                 )
 
     async def save_message(self, record: MessageRecord) -> int:
@@ -222,6 +260,63 @@ class Database:
             )
 
         return record_id
+
+    async def save_messages_batch(
+        self, records: List[MessageRecord]
+    ) -> tuple:
+        """批量保存消息记录，返回 (成功数量, 跳过数量)"""
+        if not records:
+            return 0, 0
+
+        now_ms = int(time.time() * 1000)
+        insert_sql = """
+            INSERT INTO messages (
+                platform, message_id, session_id, group_id, channel_id,
+                sender_id, sender_name, message_type,
+                message_str, message_chain, raw_message,
+                reply_to_id, content_hash, timestamp, created_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT DO NOTHING
+        """
+
+        saved = 0
+        skipped = 0
+        async with self._write_lock:
+            for record in records:
+                record.created_at = now_ms
+                if not record.content_hash:
+                    record.content_hash = compute_content_hash(
+                        record.platform, record.session_id, record.sender_id,
+                        record.message_str, record.timestamp,
+                    )
+                params = (
+                    record.platform,
+                    record.message_id,
+                    record.session_id,
+                    record.group_id,
+                    record.channel_id,
+                    record.sender_id,
+                    record.sender_name,
+                    record.message_type,
+                    record.message_str,
+                    record.message_chain,
+                    record.raw_message,
+                    record.reply_to_id,
+                    record.content_hash,
+                    record.timestamp,
+                    record.created_at,
+                )
+                cursor = await self._db.execute(insert_sql, params)
+                if cursor.rowcount > 0:
+                    saved += 1
+                else:
+                    skipped += 1
+            await self._db.commit()
+
+        logger.debug(
+            f"[MessageRecorder] 批量保存完成: {saved} 成功, {skipped} 跳过"
+        )
+        return saved, skipped
 
     def _build_where_clause(
         self, query_filter: QueryFilter, use_fts: bool = False
@@ -344,15 +439,18 @@ class Database:
         return " ".join(escaped)
 
     async def _fts_available(self) -> bool:
-        """检查 FTS5 索引是否可用"""
+        """检查 FTS5 索引是否可用（结果缓存）"""
+        if self._fts_available_cache is not None:
+            return self._fts_available_cache
         try:
             cursor = await self._db.execute("""
                 SELECT name FROM sqlite_master
                 WHERE type='table' AND name='messages_fts'
             """)
-            return await cursor.fetchone() is not None
+            self._fts_available_cache = await cursor.fetchone() is not None
         except Exception:
-            return False
+            self._fts_available_cache = False
+        return self._fts_available_cache
 
     async def query_messages(self, query_filter: QueryFilter) -> List[MessageRecord]:
         """根据过滤器查询消息"""
@@ -570,49 +668,34 @@ class Database:
         """获取消息统计信息"""
         stats = MessageStats()
 
-        cursor = await self._db.execute("SELECT COUNT(*) FROM messages")
-        result = await cursor.fetchone()
-        stats.total_count = result[0] if result else 0
-
-        cursor = await self._db.execute(
-            "SELECT COUNT(*) FROM messages WHERE message_type = 'group'"
-        )
-        result = await cursor.fetchone()
-        stats.group_message_count = result[0] if result else 0
-
-        cursor = await self._db.execute(
-            "SELECT COUNT(*) FROM messages WHERE message_type = 'private'"
-        )
-        result = await cursor.fetchone()
-        stats.private_message_count = result[0] if result else 0
-
-        cursor = await self._db.execute(
-            "SELECT COUNT(*) FROM messages WHERE message_type = 'channel'"
-        )
-        result = await cursor.fetchone()
-        stats.channel_message_count = result[0] if result else 0
+        cursor = await self._db.execute("""
+            SELECT
+                COUNT(*) as total,
+                SUM(CASE WHEN message_type = 'group' THEN 1 ELSE 0 END),
+                SUM(CASE WHEN message_type = 'private' THEN 1 ELSE 0 END),
+                SUM(CASE WHEN message_type = 'channel' THEN 1 ELSE 0 END),
+                MIN(timestamp),
+                MAX(timestamp),
+                MIN(created_at),
+                MAX(created_at)
+            FROM messages
+        """)
+        row = await cursor.fetchone()
+        if row and row[0]:
+            stats.total_count = row[0]
+            stats.group_message_count = row[1] or 0
+            stats.private_message_count = row[2] or 0
+            stats.channel_message_count = row[3] or 0
+            stats.oldest_timestamp = row[4]
+            stats.newest_timestamp = row[5]
+            stats.first_record_time = row[6]
+            stats.last_record_time = row[7]
 
         cursor = await self._db.execute(
             "SELECT platform, COUNT(*) FROM messages GROUP BY platform"
         )
         rows = await cursor.fetchall()
         stats.platform_stats = {row[0]: row[1] for row in rows}
-
-        cursor = await self._db.execute(
-            "SELECT MIN(timestamp), MAX(timestamp) FROM messages"
-        )
-        result = await cursor.fetchone()
-        if result and result[0]:
-            stats.oldest_timestamp = result[0]
-            stats.newest_timestamp = result[1]
-
-        cursor = await self._db.execute(
-            "SELECT MIN(created_at), MAX(created_at) FROM messages"
-        )
-        result = await cursor.fetchone()
-        if result and result[0]:
-            stats.first_record_time = result[0]
-            stats.last_record_time = result[1]
 
         return stats
 
@@ -622,21 +705,26 @@ class Database:
             return 0, []
         cutoff_time = int((time.time() - retention_days * 86400) * 1000)
         try:
+            media_paths: List[str] = []
             async with self._write_lock:
                 cursor = await self._db.execute(
-                    "SELECT message_chain FROM messages WHERE timestamp < ? AND message_chain IS NOT NULL",
+                    "SELECT message_chain FROM messages WHERE timestamp < ? "
+                    "AND message_chain IS NOT NULL",
                     (cutoff_time,),
                 )
-                chains = await cursor.fetchall()
+                while True:
+                    rows = await cursor.fetchmany(500)
+                    if not rows:
+                        break
+                    for row in rows:
+                        media_paths.extend(extract_media_paths(row[0]))
+
                 cursor = await self._db.execute(
                     "DELETE FROM messages WHERE timestamp < ?",
                     (cutoff_time,),
                 )
                 await self._db.commit()
                 rowcount = cursor.rowcount
-            media_paths = []
-            for row in chains:
-                media_paths.extend(extract_media_paths(row[0]))
             return rowcount, media_paths
         except aiosqlite.Error as e:
             logger.error(f"[MessageRecorder] 按时间清理失败: {e}")
@@ -646,6 +734,7 @@ class Database:
         """清理超出数量限制的旧消息，返回 (删除数量, 被删记录的媒体路径列表)"""
         if max_records <= 0:
             return 0, []
+        media_paths: List[str] = []
         async with self._write_lock:
             cursor = await self._db.execute("SELECT COUNT(*) FROM messages")
             result = await cursor.fetchone()
@@ -659,7 +748,12 @@ class Database:
                 "AND message_chain IS NOT NULL",
                 (delete_count,),
             )
-            chains = await cursor.fetchall()
+            while True:
+                rows = await cursor.fetchmany(500)
+                if not rows:
+                    break
+                for row in rows:
+                    media_paths.extend(extract_media_paths(row[0]))
 
             cursor = await self._db.execute("""
                 DELETE FROM messages
@@ -669,9 +763,6 @@ class Database:
             """, (delete_count,))
             await self._db.commit()
             rowcount = cursor.rowcount
-        media_paths = []
-        for row in chains:
-            media_paths.extend(extract_media_paths(row[0]))
         return rowcount, media_paths
 
     async def get_timeline_stats(
@@ -926,24 +1017,21 @@ class Database:
         if not candidates:
             return []
 
-        candidate_set = set(candidates)
-        referenced: set = set()
+        unreferenced = []
+        for path in candidates:
+            escaped = path.replace('%', '\\%').replace('_', '\\_')
+            cursor = await self._db.execute(
+                "SELECT 1 FROM messages WHERE message_chain LIKE ? ESCAPE '\\' LIMIT 1",
+                (f'%{escaped}%',)
+            )
+            if not await cursor.fetchone():
+                unreferenced.append(path)
+        return unreferenced
 
-        cursor = await self._db.execute(
-            "SELECT message_chain FROM messages WHERE message_chain IS NOT NULL"
-        )
 
-        while True:
-            rows = await cursor.fetchmany(500)
-            if not rows:
-                break
-            for row in rows:
-                for path in extract_media_paths(row[0]):
-                    if path in candidate_set:
-                        referenced.add(path)
-                if referenced >= candidate_set:
-                    break
-            if referenced >= candidate_set:
-                break
-
-        return list(candidate_set - referenced)
+# Schema 迁移注册表：version -> async migration function
+# 每个迁移函数接收 aiosqlite.Connection 参数
+# 示例:
+#   async def _migrate_v3(db):
+#       await db.execute("ALTER TABLE messages ADD COLUMN new_col TEXT")
+_SCHEMA_MIGRATIONS: Dict[int, Any] = {}

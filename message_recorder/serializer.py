@@ -67,6 +67,10 @@ def serialize_component(component) -> dict:
             if value is not None:
                 result[attr] = _serialize_value(value)
 
+    # 仅对未在 _PREFERRED_ATTRS 中注册的组件类型做 dir() 回退扫描
+    if comp_type in _PREFERRED_ATTRS:
+        return result
+
     for attr in dir(component):
         if attr.startswith("_") or attr in _SKIP_ATTRS:
             continue
