@@ -627,17 +627,17 @@ class Database:
                     "SELECT message_chain FROM messages WHERE timestamp < ? AND message_chain IS NOT NULL",
                     (cutoff_time,),
                 )
-                rows = await cursor.fetchall()
-                media_paths = []
-                for row in rows:
-                    media_paths.extend(extract_media_paths(row[0]))
-
+                chains = await cursor.fetchall()
                 cursor = await self._db.execute(
                     "DELETE FROM messages WHERE timestamp < ?",
                     (cutoff_time,),
                 )
                 await self._db.commit()
-                return cursor.rowcount, media_paths
+                rowcount = cursor.rowcount
+            media_paths = []
+            for row in chains:
+                media_paths.extend(extract_media_paths(row[0]))
+            return rowcount, media_paths
         except aiosqlite.Error as e:
             logger.error(f"[MessageRecorder] 按时间清理失败: {e}")
             return 0, []
@@ -659,10 +659,7 @@ class Database:
                 "AND message_chain IS NOT NULL",
                 (delete_count,),
             )
-            rows = await cursor.fetchall()
-            media_paths = []
-            for row in rows:
-                media_paths.extend(extract_media_paths(row[0]))
+            chains = await cursor.fetchall()
 
             cursor = await self._db.execute("""
                 DELETE FROM messages
@@ -671,7 +668,11 @@ class Database:
                 )
             """, (delete_count,))
             await self._db.commit()
-            return cursor.rowcount, media_paths
+            rowcount = cursor.rowcount
+        media_paths = []
+        for row in chains:
+            media_paths.extend(extract_media_paths(row[0]))
+        return rowcount, media_paths
 
     async def get_timeline_stats(
         self,
@@ -932,8 +933,7 @@ class Database:
             "SELECT message_chain FROM messages WHERE message_chain IS NOT NULL"
         )
 
-        found_all = False
-        while not found_all:
+        while True:
             rows = await cursor.fetchmany(500)
             if not rows:
                 break
@@ -942,7 +942,8 @@ class Database:
                     if path in candidate_set:
                         referenced.add(path)
                 if referenced >= candidate_set:
-                    found_all = True
                     break
+            if referenced >= candidate_set:
+                break
 
         return list(candidate_set - referenced)

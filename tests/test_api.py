@@ -214,7 +214,8 @@ class TestMessageRecorderAPIMedia:
     def test_get_media_url(self, db_and_api):
         _, api = db_and_api
         url = api.get_media_url("images/2026/abc.jpg")
-        assert "images/2026/abc.jpg" in url
+        assert url.startswith("/astrbot_plugin_message_recorder/media?path=")
+        assert "images" in url and "abc.jpg" in url
 
     def test_get_media_url_empty(self, db_and_api):
         _, api = db_and_api

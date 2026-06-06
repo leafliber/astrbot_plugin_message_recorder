@@ -256,7 +256,10 @@ def parse_time_range(time_str: str) -> Tuple[int, int]:
     if date:
         return get_day_start_end(date)
 
-    # 无法解析，返回最近24小时
+    import logging
+    logging.getLogger(__name__).warning(
+        f"[MessageRecorder] 无法解析时间字符串: '{time_str}'，回退到最近24小时"
+    )
     now = datetime.now()
     return (
         int((now - timedelta(hours=24)).timestamp() * 1000),

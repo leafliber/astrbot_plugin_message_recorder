@@ -220,6 +220,11 @@ class MediaDownloader:
             return False
         try:
             file_path = self.media_base_path / relative_path
+            try:
+                file_path.resolve().relative_to(self.media_base_path.resolve())
+            except ValueError:
+                logger.warning(f"[MediaDownloader] 拒绝删除 media 目录外的文件: {relative_path}")
+                return False
             if file_path.exists() and file_path.is_file():
                 file_path.unlink()
                 logger.debug(f"[MediaDownloader] 已删除媒体文件: {relative_path}")

@@ -118,6 +118,8 @@ class MessageRecorder(Star):
 
     def _start_cleanup_task(self):
         interval_hours = self.config.get("cleanup_interval_hours", 24)
+        if interval_hours <= 0:
+            return
         self._cleanup_task = asyncio.create_task(
             self._cleanup_loop(interval_hours)
         )
@@ -126,8 +128,8 @@ class MessageRecorder(Star):
         interval_seconds = interval_hours * 3600
         while True:
             try:
-                await asyncio.sleep(interval_seconds)
                 await self._do_cleanup()
+                await asyncio.sleep(interval_seconds)
             except asyncio.CancelledError:
                 break
             except Exception as e:

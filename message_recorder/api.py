@@ -20,8 +20,14 @@ class MessageRecorderAPI:
     """
 
     def __init__(self, database: Database, media_downloader: Optional[MediaDownloader] = None):
-        self.db = database
+        self._db = database
         self._media_downloader = media_downloader
+
+    @property
+    def db(self) -> Database:
+        if self._db is None:
+            raise RuntimeError("数据库未初始化，无法执行操作")
+        return self._db
 
     @staticmethod
     def get_media_base_path() -> Path:
@@ -49,6 +55,10 @@ class MessageRecorderAPI:
             return None
         media_base = self.get_media_base_path()
         file_path = media_base / relative_path
+        try:
+            file_path.resolve().relative_to(media_base.resolve())
+        except ValueError:
+            return None
         if file_path.exists() and file_path.is_file():
             return file_path
         return None
@@ -58,18 +68,19 @@ class MessageRecorderAPI:
         获取媒体文件的 Web 访问 URL
 
         Args:
-            relative_path: 相对路径（如 "images/2026-04/abc123.jpg"）
+            relative_path: 相对路径（如 "images/ab/abc123.jpg"）
 
         Returns:
-            Web URL（如 "/message_recorder/api/media/images/2026-04/abc123.jpg"）
+            Web URL（如 "/astrbot_plugin_message_recorder/media?path=images/ab/abc123.jpg"）
 
         Examples:
             api = plugin.get_api()
-            url = api.get_media_url("images/2026-04/abc123.jpg")
+            url = api.get_media_url("images/ab/abc123.jpg")
         """
         if not relative_path:
             return ""
-        return f"/message_recorder/api/media/{relative_path}"
+        from urllib.parse import urlencode
+        return f"/{PLUGIN_DIR_NAME}/media?{urlencode({'path': relative_path})}"
 
     def extract_media_paths(self, message: MessageRecord) -> List[str]:
         """

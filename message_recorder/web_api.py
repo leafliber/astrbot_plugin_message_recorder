@@ -26,9 +26,11 @@ from .time_utils import parse_time_range, normalize_timestamp
 MAX_IMPORT_FILE_SIZE = 4 * 1024 * 1024 * 1024
 MAX_EXPORT_FILE_AGE = 3600
 MAX_DOWNLOAD_DATA_SIZE = 50 * 1024 * 1024
+MAX_STATS_LIMIT = 200
 ALLOWED_IMPORT_EXTENSIONS = {".json", ".csv", ".zip"}
 CHUNK_SIZE = 5 * 1024 * 1024
 CHUNK_SESSION_MAX_AGE = 3600
+MAX_CHUNK_SESSIONS = 20
 DB_OPERATION_TIMEOUT = 30
 IMPORT_RECORD_TIMEOUT = 5
 
@@ -322,7 +324,7 @@ async def register_all_web_apis(context, db: Database):
         if not db:
             return jsonify({"success": False, "error": "数据库未初始化"})
         try:
-            limit = int(request.args.get("limit", 20))
+            limit = min(int(request.args.get("limit", 20)), MAX_STATS_LIMIT)
             time_range = request.args.get("time")
             platform = request.args.get("platform")
             group_id = request.args.get("group_id")
@@ -342,7 +344,7 @@ async def register_all_web_apis(context, db: Database):
         if not db:
             return jsonify({"success": False, "error": "数据库未初始化"})
         try:
-            limit = int(request.args.get("limit", 20))
+            limit = min(int(request.args.get("limit", 20)), MAX_STATS_LIMIT)
             time_range = request.args.get("time")
             platform = request.args.get("platform")
             start_time, end_time = None, None
@@ -592,15 +594,30 @@ async def register_all_web_apis(context, db: Database):
             file_ext = Path(filename).suffix.lower()
             if file_ext not in ALLOWED_IMPORT_EXTENSIONS:
                 return jsonify({"success": False, "error": f"不支持的文件格式: {file_ext}"})
-            content = uploaded_file.read()
-            if len(content) > MAX_IMPORT_FILE_SIZE:
+            content_length = request.content_length
+            if content_length and content_length > MAX_IMPORT_FILE_SIZE:
                 max_gb = MAX_IMPORT_FILE_SIZE // (1024 * 1024 * 1024)
                 return jsonify({"success": False, "error": f"文件大小超过限制（最大 {max_gb}GB）"})
+
             temp_dir = _get_plugin_data_dir() / "temp"
             temp_dir.mkdir(parents=True, exist_ok=True)
             task_id = f"import_{uuid.uuid4().hex[:12]}"
             temp_file = temp_dir / f"{task_id}{file_ext}"
-            temp_file.write_bytes(content)
+
+            chunks = []
+            total_size = 0
+            _read_buf_size = 4 * 1024 * 1024
+            while True:
+                chunk = uploaded_file.read(_read_buf_size)
+                if not chunk:
+                    break
+                total_size += len(chunk)
+                if total_size > MAX_IMPORT_FILE_SIZE:
+                    max_gb = MAX_IMPORT_FILE_SIZE // (1024 * 1024 * 1024)
+                    return jsonify({"success": False, "error": f"文件大小超过限制（最大 {max_gb}GB）"})
+                chunks.append(chunk)
+
+            temp_file.write_bytes(b"".join(chunks))
             mode = request.form.get("mode") or request.args.get("mode", "skip_duplicates")
             _import_tasks[task_id] = {
                 "status": "pending",
@@ -625,7 +642,7 @@ async def register_all_web_apis(context, db: Database):
                     "status": "pending",
                     "filename": filename,
                     "mode": mode,
-                    "file_size": len(content),
+                    "file_size": total_size,
                 },
             })
         except Exception as e:
@@ -634,6 +651,8 @@ async def register_all_web_apis(context, db: Database):
 
     async def api_import_init():
         try:
+            if len(_chunk_sessions) >= MAX_CHUNK_SESSIONS:
+                return jsonify({"success": False, "error": "当前分片上传会话过多，请稍后重试"})
             data = await request.get_json()
             filename = data.get("filename", "")
             file_size = data.get("file_size", 0)
@@ -720,19 +739,21 @@ async def register_all_web_apis(context, db: Database):
             temp_dir.mkdir(parents=True, exist_ok=True)
             assembled_file = temp_dir / f"{task_id}{session['file_ext']}"
 
-            with open(assembled_file, "wb") as dst:
-                for i in range(session["total_chunks"]):
-                    chunk_path = Path(session["chunks_dir"]) / f"{i:06d}"
-                    if chunk_path.exists():
-                        with open(chunk_path, "rb") as src:
-                            shutil.copyfileobj(src, dst)
+            def _assemble_chunks():
+                with open(assembled_file, "wb") as dst:
+                    for i in range(session["total_chunks"]):
+                        chunk_path = Path(session["chunks_dir"]) / f"{i:06d}"
+                        if chunk_path.exists():
+                            with open(chunk_path, "rb") as src:
+                                shutil.copyfileobj(src, dst)
+                shutil.rmtree(session["chunks_dir"], ignore_errors=True)
+                return assembled_file.stat().st_size
 
-            shutil.rmtree(session["chunks_dir"], ignore_errors=True)
+            actual_size = await asyncio.to_thread(_assemble_chunks)
             _chunk_sessions.pop(session_id, None)
 
-            actual_size = assembled_file.stat().st_size
             if actual_size > MAX_IMPORT_FILE_SIZE:
-                assembled_file.unlink()
+                await asyncio.to_thread(assembled_file.unlink)
                 max_gb = MAX_IMPORT_FILE_SIZE // (1024 * 1024 * 1024)
                 return jsonify({"success": False, "error": f"文件大小超过限制（最大 {max_gb}GB）"})
 
@@ -795,7 +816,7 @@ async def register_all_web_apis(context, db: Database):
         try:
             platform = request.args.get("platform")
             group_id = request.args.get("group_id")
-            limit = int(request.args.get("limit", 50))
+            limit = min(int(request.args.get("limit", 50)), MAX_STATS_LIMIT)
             senders = await db.get_distinct_senders(platform=platform, group_id=group_id, limit=limit)
             return jsonify({"success": True, "data": {"senders": senders}})
         except Exception as e:
@@ -807,7 +828,7 @@ async def register_all_web_apis(context, db: Database):
             return jsonify({"success": False, "error": "数据库未初始化"})
         try:
             platform = request.args.get("platform")
-            limit = int(request.args.get("limit", 50))
+            limit = min(int(request.args.get("limit", 50)), MAX_STATS_LIMIT)
             groups = await db.get_distinct_groups(platform=platform, limit=limit)
             return jsonify({"success": True, "data": {"groups": groups}})
         except Exception as e:
@@ -1212,6 +1233,8 @@ async def _execute_import_task(task_id: str, db: Database, file_path: str, mode:
         if mode == "replace":
             task["error"] = "replace 模式暂不支持"
             task["status"] = "failed"
+            task["completed_at"] = time.time()
+            await _safe_remove_file(file_path)
             return
 
         # zip 需要特殊处理（解压 + 媒体恢复），仍需一次性加载
@@ -1329,6 +1352,7 @@ async def _execute_import_task(task_id: str, db: Database, file_path: str, mode:
         task["status"] = "failed"
         task["error"] = str(e)
         task["completed_at"] = time.time()
+        await _safe_remove_file(file_path)
 
 
 def _import_zip_package(file_path: str) -> tuple:
@@ -1378,7 +1402,7 @@ async def cleanup_expired_tasks():
 
             expired_tasks = []
             for task_id, task in list(_export_tasks.items()):
-                completed_at = task.get("completed_at", 0)
+                completed_at = task.get("completed_at") or 0
                 if completed_at and current_time - completed_at > MAX_EXPORT_FILE_AGE:
                     expired_tasks.append(task_id)
                     file_path = task.get("file_path")
@@ -1405,7 +1429,7 @@ async def cleanup_expired_tasks():
 
             expired_imports = []
             for task_id, task in list(_import_tasks.items()):
-                completed_at = task.get("completed_at", 0)
+                completed_at = task.get("completed_at") or 0
                 if completed_at and current_time - completed_at > MAX_EXPORT_FILE_AGE:
                     expired_imports.append(task_id)
             for task_id in expired_imports:
