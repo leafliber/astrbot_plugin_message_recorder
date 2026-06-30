@@ -5,7 +5,7 @@ import json
 import sys
 import time
 from pathlib import Path
-from typing import Optional
+from typing import Optional, Any
 
 plugin_root = Path(__file__).parent
 if str(plugin_root) not in sys.path:
@@ -240,7 +240,7 @@ class MessageRecorder(Star):
 
                     if self._media_downloader and self.config.get("save_media_files", False):
                         download_tasks = [
-                            self._download_media_for_component(comp, comp_data, adapter)
+                            self._download_media_for_component(comp, comp_data, adapter, event)
                             for comp, comp_data in zip(message_chain, chain_data)
                             if comp_data.get("type") in MEDIA_TYPE_MAP
                         ]
@@ -284,7 +284,7 @@ class MessageRecorder(Star):
         except Exception:
             return "unknown"
 
-    async def _download_media_for_component(self, component, comp_data: dict, adapter):
+    async def _download_media_for_component(self, component, comp_data: dict, adapter, event):
         comp_type = comp_data.get("type", "")
         if comp_type not in MEDIA_TYPE_MAP:
             return
@@ -294,6 +294,8 @@ class MessageRecorder(Star):
             url = serializer_extract_media_url(comp_data)
         if not url:
             return
+
+        bot_api = self._get_bot_api(event)
 
         async with self._download_semaphore:
             try:
@@ -305,6 +307,7 @@ class MessageRecorder(Star):
                     url=url,
                     component_type=comp_type,
                     filename=filename,
+                    bot_api=bot_api,
                 )
                 if local_path:
                     comp_data["local_path"] = local_path
@@ -313,6 +316,25 @@ class MessageRecorder(Star):
                     f"[MessageRecorder] 下载多媒体文件失败 "
                     f"(type={comp_type}): {e}"
                 )
+
+    def _get_bot_api(self, event) -> Optional[Any]:
+        """从事件获取 OneBot api 对象（需支持 call_action，主要用于 aiocqhttp 兜底）。
+
+        非 OneBot 平台或不支持 call_action 时返回 None，此时下载器仅使用
+        MediaResolver + aiohttp，不会调用 OneBot get_image / download_file。
+        """
+        try:
+            bot = getattr(event, 'bot', None)
+            if bot is None:
+                return None
+            api = getattr(bot, 'api', None)
+            if api is not None and hasattr(api, 'call_action'):
+                return api
+            if hasattr(bot, 'call_action'):
+                return bot
+        except Exception:
+            pass
+        return None
 
     def _check_commands_enabled(self, event: AstrMessageEvent) -> bool:
         return self.config.get("enable_commands", True)

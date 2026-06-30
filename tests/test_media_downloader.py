@@ -1,15 +1,25 @@
 """media_downloader.py 单元测试"""
 
+import io
 import json
 from pathlib import Path
 from unittest.mock import patch, MagicMock, AsyncMock
 
 import pytest
+from PIL import Image
 
 from astrbot_plugin_message_recorder.message_recorder.media_downloader import (
     MediaDownloader,
     MEDIA_TYPE_MAP,
 )
+
+
+def _make_png_bytes() -> bytes:
+    """生成一个最小 PNG 的字节数据，用于测试。"""
+    img = Image.new("RGB", (2, 2), (255, 0, 0))
+    buf = io.BytesIO()
+    img.save(buf, format="PNG")
+    return buf.getvalue()
 
 
 class TestMediaTypeMap:
@@ -98,3 +108,100 @@ class TestDeleteMediaFiles:
 
             deleted = md.delete_media_files(["images/a.jpg", "images/b.jpg", "images/c.jpg"])
             assert deleted == 2
+
+
+class TestDetectImageFormat:
+    def test_png(self):
+        assert MediaDownloader._detect_image_format(_make_png_bytes()) == "png"
+
+    def test_invalid_bytes(self):
+        assert MediaDownloader._detect_image_format(b"not an image") is None
+
+    def test_empty(self):
+        assert MediaDownloader._detect_image_format(b"") is None
+
+
+class TestDetermineExtension:
+    def _make_md(self, tmp_path):
+        with patch(
+            "astrbot_plugin_message_recorder.message_recorder.media_downloader.get_astrbot_plugin_data_path",
+            return_value=str(tmp_path),
+        ):
+            return MediaDownloader("test_plugin")
+
+    def test_url_extension_wins(self, tmp_path):
+        md = self._make_md(tmp_path)
+        ext = md._determine_extension("http://x.com/a.jpg", "", "Image", _make_png_bytes())
+        assert ext == ".jpg"
+
+    def test_image_bytes_detection(self, tmp_path):
+        md = self._make_md(tmp_path)
+        # data: URI 无可识别扩展名，靠 bytes 检测为 png
+        ext = md._determine_extension("data:image/png;base64,xxx", "", "Image", _make_png_bytes())
+        assert ext == ".png"
+
+    def test_content_type_fallback(self, tmp_path):
+        md = self._make_md(tmp_path)
+        ext = md._determine_extension("http://x.com/img", "image/gif", "Image", None)
+        assert ext == ".gif"
+
+    def test_default_for_non_image(self, tmp_path):
+        md = self._make_md(tmp_path)
+        ext = md._determine_extension("http://x.com/noext", "", "File", None)
+        assert ext == ".bin"
+
+
+class TestDownloadMediaNonHttp:
+    """验证非 http 引用不再被直接拒绝，而是交给下载器尝试。"""
+
+    def _make_md(self, tmp_path):
+        with patch(
+            "astrbot_plugin_message_recorder.message_recorder.media_downloader.get_astrbot_plugin_data_path",
+            return_value=str(tmp_path),
+        ):
+            return MediaDownloader("test_plugin", max_retries=0)
+
+    async def test_non_http_tries_resolver_then_fails(self, tmp_path):
+        md = self._make_md(tmp_path)
+        # MediaResolver / aiohttp / OneBot 均失败 → 返回 None（不再因非 http 直接返回 None）
+        with patch.object(
+            md, "_fetch_via_media_resolver", new_callable=AsyncMock, return_value=None
+        ):
+            result = await md.download_media("file:///nonexist/x.png", "Image")
+        assert result is None
+
+    async def test_non_http_succeeds_via_resolver(self, tmp_path):
+        md = self._make_md(tmp_path)
+        png_bytes = _make_png_bytes()
+        with patch.object(
+            md, "_fetch_via_media_resolver", new_callable=AsyncMock, return_value=png_bytes
+        ):
+            result = await md.download_media("file:///some/path.png", "Image")
+        assert result is not None
+        assert result.endswith(".png")
+
+    async def test_empty_url_returns_none(self, tmp_path):
+        md = self._make_md(tmp_path)
+        assert await md.download_media("", "Image") is None
+
+    async def test_bare_filename_with_onebot_fallback(self, tmp_path):
+        md = self._make_md(tmp_path)
+        png_bytes = _make_png_bytes()
+        bot_api = MagicMock()
+        bot_api.call_action = AsyncMock(
+            return_value={"url": "/local/cache/abc.png", "file": "/local/cache/abc.png"}
+        )
+        # MediaResolver 失败 → OneBot 兜底返回本地路径（模拟不可达）→ 这里用 get_image 返回不可达路径
+        # 实际上 _fetch_via_onebot 会检查 is_file()，不可达则返回 None
+        # 为测通完整链路，让 get_image 返回一个真实存在的临时文件
+        real_file = tmp_path / "real.png"
+        real_file.write_bytes(png_bytes)
+        bot_api.call_action = AsyncMock(
+            return_value={"url": str(real_file)}
+        )
+        with patch.object(
+            md, "_fetch_via_media_resolver", new_callable=AsyncMock, return_value=None
+        ):
+            result = await md.download_media("abc123.image", "Image", bot_api=bot_api)
+        assert result is not None
+        assert result.endswith(".png")

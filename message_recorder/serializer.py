@@ -130,20 +130,17 @@ def extract_reply_info(chain_data: List[dict]) -> Optional[str]:
 
 
 def extract_media_url(comp_data: dict) -> Optional[str]:
-    comp_type = comp_data.get("type", "")
+    """提取媒体引用（url / file / path 中的第一个非空值）。
 
-    url = comp_data.get("url")
-    if url and isinstance(url, str) and url.startswith("http"):
-        return url
-
-    file_val = comp_data.get("file")
-    if isinstance(file_val, str) and file_val.startswith("http"):
-        return file_val
-
-    path_val = comp_data.get("path")
-    if isinstance(path_val, str) and path_val.startswith("http"):
-        return path_val
-
+    不再限制必须 http 开头：OneBot 实现返回的可能是 http CDN 链接、
+    ``file:///`` URI、``base64://`` 负载、裸本地路径或裸文件名/hash。
+    能否真正下载交给 MediaDownloader（MediaResolver + OneBot 兜底）判断，
+    这里只负责把所有可能的引用都交出去，避免在提取阶段就静默丢弃。
+    """
+    for key in ("url", "file", "path"):
+        val = comp_data.get(key)
+        if isinstance(val, str) and val:
+            return val
     return None
 
 

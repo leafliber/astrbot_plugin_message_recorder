@@ -144,10 +144,28 @@ class TestExtractMediaUrl:
         assert extract_media_url({"type": "Plain", "text": "hello"}) is None
 
     def test_local_path(self):
-        assert extract_media_url({"type": "Image", "url": "/local/path/img.png"}) is None
+        # 放宽后：本地路径也会被返回，交由下载器判断
+        assert extract_media_url({"type": "Image", "url": "/local/path/img.png"}) == "/local/path/img.png"
 
     def test_non_http_url(self):
-        assert extract_media_url({"type": "Image", "url": "data:image/png;base64,abc"}) is None
+        # 放宽后：data: URI 也会被返回
+        assert extract_media_url({"type": "Image", "url": "data:image/png;base64,abc"}) == "data:image/png;base64,abc"
+
+    def test_file_uri(self):
+        assert extract_media_url({"type": "Image", "url": "file:///C:/Users/x/img.png"}) == "file:///C:/Users/x/img.png"
+
+    def test_base64_payload(self):
+        assert extract_media_url({"type": "Image", "file": "base64://aGVsbG8="}) == "base64://aGVsbG8="
+
+    def test_bare_filename_fallback(self):
+        # url 为空时回退到 file 字段（裸文件名也返回）
+        assert extract_media_url({"type": "Image", "url": "", "file": "abc123.image"}) == "abc123.image"
+
+    def test_priority_url_over_file(self):
+        assert extract_media_url({"type": "Image", "url": "http://a.com/1.png", "file": "x.png"}) == "http://a.com/1.png"
+
+    def test_empty_string_values_skipped(self):
+        assert extract_media_url({"type": "Image", "url": "", "file": "", "path": ""}) is None
 
 
 class TestComputeContentHash:

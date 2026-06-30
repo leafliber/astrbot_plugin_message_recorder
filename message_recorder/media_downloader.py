@@ -4,7 +4,7 @@ import asyncio
 import hashlib
 import io
 from pathlib import Path
-from typing import Optional, List
+from typing import Optional, List, Any, Tuple
 
 import aiohttp
 from PIL import Image
@@ -93,8 +93,19 @@ class MediaDownloader:
         url: str,
         component_type: str,
         filename: Optional[str] = None,
+        bot_api: Optional[Any] = None,
     ) -> Optional[str]:
-        if not url or not url.startswith("http"):
+        """下载媒体文件。
+
+        Args:
+            url: 媒体引用。可为 http(s) URL、``file:///`` URI、``base64://``
+                负载、``data:`` URI、裸本地路径或 OneBot 文件名/hash。
+            component_type: 组件类型（Image/Record/Video/File）。
+            filename: 指定文件名（仅 File 组件常用）。
+            bot_api: 可选的 OneBot api 对象（需有 ``call_action`` 方法）。
+                常规下载失败时调用 ``get_image`` / ``download_file`` 兜底。
+        """
+        if not url:
             return None
 
         media_subdir = MEDIA_TYPE_MAP.get(component_type, "files")
@@ -102,24 +113,28 @@ class MediaDownloader:
         for attempt in range(self.max_retries + 1):
             try:
                 result = await self._do_download(
-                    url, component_type, media_subdir, filename
+                    url, component_type, media_subdir, filename, bot_api
                 )
-                return result
-            except (aiohttp.ClientError, asyncio.TimeoutError) as e:
+                if result is not None:
+                    return result
+
+                # 所有下载方式均失败
                 if attempt < self.max_retries:
                     logger.debug(
-                        f"[MediaDownloader] 下载失败 (尝试 {attempt + 1}/{self.max_retries + 1}): {e}"
+                        f"[MediaDownloader] 下载失败 (尝试 {attempt + 1}/{self.max_retries + 1}): "
+                        f"{url[:100]}"
                     )
                     await asyncio.sleep(self.retry_delay * (attempt + 1))
                 else:
                     logger.warning(
                         f"[MediaDownloader] 下载失败，已重试 {self.max_retries} 次: "
-                        f"URL: {url[:100]}, 错误: {e}"
+                        f"URL: {url[:100]}"
                     )
                     return None
             except Exception as e:
                 logger.warning(f"[MediaDownloader] 下载出错: {e}")
                 return None
+        return None
 
     async def _do_download(
         self,
@@ -127,50 +142,205 @@ class MediaDownloader:
         component_type: str,
         media_subdir: str,
         filename: Optional[str],
+        bot_api: Optional[Any],
     ) -> Optional[str]:
-        session = await self._get_session()
-        async with session.get(url) as resp:
-            if resp.status != 200:
-                logger.warning(
-                    f"[MediaDownloader] 下载失败: HTTP {resp.status}, URL: {url[:100]}"
-                )
-                return None
+        content, content_type = await self._fetch_bytes(
+            url, component_type, bot_api
+        )
+        if not content:
+            return None
 
-            content = await resp.read()
-            if not content:
-                logger.warning("[MediaDownloader] 下载内容为空")
-                return None
+        ext = self._determine_extension(url, content_type, component_type, content)
 
-            content_type = resp.headers.get("Content-Type", "")
-            ext = self._determine_extension(url, content_type, component_type)
+        if component_type == "Image" and self.image_save_mode == "thumbnail":
+            content = self._create_thumbnail(content)
 
-            if component_type == "Image" and self.image_save_mode == "thumbnail":
-                content = self._create_thumbnail(content)
+        content_hash = hashlib.sha256(content).hexdigest()[:16]
 
-            content_hash = hashlib.sha256(content).hexdigest()[:16]
+        if not filename:
+            filename = f"{content_hash}{ext}"
 
-            if not filename:
-                filename = f"{content_hash}{ext}"
+        hash_dir = self._get_hash_dir(media_subdir, content_hash)
+        file_path = hash_dir / filename
 
-            hash_dir = self._get_hash_dir(media_subdir, content_hash)
-            file_path = hash_dir / filename
-
-            if file_path.exists():
-                rel_path = file_path.relative_to(self.media_base_path)
-                logger.debug(
-                    f"[MediaDownloader] 文件已存在，跳过保存: {rel_path}"
-                )
-                return str(rel_path)
-
-            hash_dir.mkdir(parents=True, exist_ok=True)
-            await asyncio.to_thread(file_path.write_bytes, content)
-
+        if file_path.exists():
             rel_path = file_path.relative_to(self.media_base_path)
             logger.debug(
-                f"[MediaDownloader] 文件已保存: {rel_path} "
-                f"({len(content)} bytes)"
+                f"[MediaDownloader] 文件已存在，跳过保存: {rel_path}"
             )
             return str(rel_path)
+
+        hash_dir.mkdir(parents=True, exist_ok=True)
+        await asyncio.to_thread(file_path.write_bytes, content)
+
+        rel_path = file_path.relative_to(self.media_base_path)
+        logger.debug(
+            f"[MediaDownloader] 文件已保存: {rel_path} "
+            f"({len(content)} bytes)"
+        )
+        return str(rel_path)
+
+    async def _fetch_bytes(
+        self,
+        url: str,
+        component_type: str,
+        bot_api: Optional[Any],
+    ) -> Tuple[Optional[bytes], str]:
+        """获取媒体字节数据，返回 (bytes, content_type)。
+
+        下载优先级：
+        1. AstrBot 官方 ``MediaResolver``（支持 http/file:///base64/data:/裸路径）
+        2. aiohttp（仅 http(s)，可拿到 content_type）
+        3. OneBot 兜底（get_image / download_file，需 bot_api）
+        """
+        # 1. MediaResolver：统一处理各种引用格式
+        content = await self._fetch_via_media_resolver(url, component_type)
+        if content:
+            return content, ""
+
+        # 2. aiohttp：仅对 http(s) 链接
+        if url.startswith(("http://", "https://")):
+            content, content_type = await self._fetch_via_aiohttp(url)
+            if content:
+                return content, content_type
+
+        # 3. OneBot 兜底：裸文件名 / 过期 CDN / 不可达本地路径
+        if bot_api is not None:
+            content = await self._fetch_via_onebot(url, bot_api)
+            if content:
+                return content, ""
+
+        logger.warning(
+            f"[MediaDownloader] 所有下载方式均失败: {url[:100]}"
+        )
+        return None, ""
+
+    async def _fetch_via_media_resolver(
+        self, url: str, component_type: str
+    ) -> Optional[bytes]:
+        """通过 AstrBot 官方 MediaResolver 获取字节。
+
+        统一处理 http(s)、``file:///``、``base64://``、``data:`` 以及裸本地路径。
+        """
+        media_type_map = {
+            "Image": "image",
+            "Record": "audio",
+            "Video": "video",
+            "File": "file",
+        }
+        media_type = media_type_map.get(component_type, "file")
+        try:
+            from astrbot.core.utils.media_utils import MediaResolver
+
+            data = await MediaResolver(url, media_type=media_type).to_bytes()
+            if data:
+                logger.debug(
+                    f"[MediaDownloader] MediaResolver 成功: {url[:80]} "
+                    f"({len(data)} bytes)"
+                )
+                return data
+        except Exception as e:
+            logger.debug(
+                f"[MediaDownloader] MediaResolver 失败: {url[:80]}, "
+                f"错误: {type(e).__name__}: {e}"
+            )
+        return None
+
+    async def _fetch_via_aiohttp(
+        self, url: str
+    ) -> Tuple[Optional[bytes], str]:
+        """通过 aiohttp 下载 http(s) URL。返回 (bytes, content_type)。"""
+        session = await self._get_session()
+        try:
+            async with session.get(url) as resp:
+                if resp.status != 200:
+                    logger.debug(
+                        f"[MediaDownloader] aiohttp 下载失败: HTTP {resp.status}, "
+                        f"URL: {url[:80]}"
+                    )
+                    return None, ""
+                content = await resp.read()
+                content_type = resp.headers.get("Content-Type", "")
+                if content:
+                    logger.debug(
+                        f"[MediaDownloader] aiohttp 成功: {url[:80]} "
+                        f"({len(content)} bytes)"
+                    )
+                return content, content_type
+        except (aiohttp.ClientError, asyncio.TimeoutError) as e:
+            logger.debug(
+                f"[MediaDownloader] aiohttp 异常: {url[:80]}, "
+                f"错误: {type(e).__name__}: {e}"
+            )
+            return None, ""
+
+    async def _fetch_via_onebot(
+        self, url: str, bot_api: Any
+    ) -> Optional[bytes]:
+        """通过 OneBot API（get_image / download_file）兜底下载。
+
+        覆盖场景：
+        - url 为 http(s) 且常规下载失败（CDN 过期）：调 ``download_file`` 重下
+        - url 为裸文件名 / 不可达本地路径：取文件名调 ``get_image`` 换取可访问地址
+        """
+        from pathlib import Path as PathLib
+
+        try:
+            # 场景1：http(s) 链接 → download_file
+            if url.startswith(("http://", "https://")):
+                result = await bot_api.call_action(
+                    "download_file", url=url, thread_cnt=1
+                )
+                if isinstance(result, dict):
+                    path = result.get("file") or result.get("body")
+                    if path:
+                        logger.debug(
+                            f"[MediaDownloader] OneBot download_file 成功: "
+                            f"{url[:50]}... -> {path}"
+                        )
+                        return await asyncio.to_thread(PathLib(path).read_bytes)
+                return None
+
+            # 场景2：裸文件名 / 本地路径 → get_image
+            file_name = PathLib(url).name
+            if not file_name:
+                return None
+            result = await bot_api.call_action("get_image", file=file_name)
+            if not isinstance(result, dict):
+                return None
+            returned_url = result.get("url") or result.get("file")
+            if not returned_url:
+                return None
+
+            # 返回 http → download_file 下载
+            if returned_url.startswith(("http://", "https://")):
+                dl_result = await bot_api.call_action(
+                    "download_file", url=returned_url, thread_cnt=1
+                )
+                if isinstance(dl_result, dict):
+                    path = dl_result.get("file") or dl_result.get("body")
+                    if path:
+                        logger.debug(
+                            f"[MediaDownloader] OneBot get_image+download_file 成功: "
+                            f"{file_name} -> {path}"
+                        )
+                        return await asyncio.to_thread(PathLib(path).read_bytes)
+                return None
+
+            # 返回本地可达路径 → 直接读
+            if PathLib(returned_url).is_file():
+                logger.debug(
+                    f"[MediaDownloader] OneBot get_image 本地路径成功: "
+                    f"{file_name} -> {returned_url}"
+                )
+                return await asyncio.to_thread(PathLib(returned_url).read_bytes)
+            return None
+        except Exception as e:
+            logger.debug(
+                f"[MediaDownloader] OneBot 兜底失败: {url[:80]}, "
+                f"错误: {type(e).__name__}: {e}"
+            )
+            return None
 
     def _create_thumbnail(self, image_data: bytes) -> bytes:
         try:
@@ -195,7 +365,11 @@ class MediaDownloader:
         return self.media_base_path / media_subdir / prefix
 
     def _determine_extension(
-        self, url: str, content_type: str, component_type: str
+        self,
+        url: str,
+        content_type: str,
+        component_type: str,
+        content: Optional[bytes] = None,
     ) -> str:
         url_path = url.split("?")[0]
         if "." in url_path:
@@ -207,6 +381,12 @@ class MediaDownloader:
             if ct in content_type:
                 return ext
 
+        # 图片：通过文件头检测真实格式（base64/data: 等无扩展名场景）
+        if component_type == "Image" and content:
+            detected = self._detect_image_format(content)
+            if detected:
+                return f".{detected}"
+
         defaults = {
             "Image": ".jpg",
             "Record": ".wav",
@@ -214,6 +394,23 @@ class MediaDownloader:
             "File": ".bin",
         }
         return defaults.get(component_type, ".bin")
+
+    @staticmethod
+    def _detect_image_format(content: bytes) -> Optional[str]:
+        """通过文件头检测图片格式，返回不带点的扩展名。"""
+        try:
+            img = Image.open(io.BytesIO(content))
+            fmt = (img.format or "").upper()
+            fmt_map = {
+                "JPEG": "jpg",
+                "PNG": "png",
+                "GIF": "gif",
+                "WEBP": "webp",
+                "BMP": "bmp",
+            }
+            return fmt_map.get(fmt)
+        except Exception:
+            return None
 
     def delete_media_file(self, relative_path: str) -> bool:
         if not relative_path:
