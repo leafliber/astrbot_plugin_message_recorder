@@ -5,6 +5,17 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.0.4] - 2026-08-09
+
+### Fixed
+
+- 修复 AstrBot 将图片、语音预处理为事件临时文件后，消息记录器的后台任务可能在临时文件被清理后才开始读取，导致媒体保存失败的问题
+- 媒体文件现在会在消息事件处理器返回前完成持久化，后台任务仅负责保存已脱离事件生命周期的消息快照
+
+### Added
+
+- 新增媒体临时文件生命周期回归测试，覆盖事件结束后源文件被删除、后台数据库写入仍能使用持久副本的场景
+
 ## [0.0.3] - 2026-06-01
 
 ### Changed

@@ -12,6 +12,31 @@ class _MockMessageType(Enum):
     OTHER_MESSAGE = "OtherMessage"
 
 
+class _MockEventMessageType(Enum):
+    ALL = "all"
+
+
+class _MockFilter:
+    EventMessageType = _MockEventMessageType
+
+    @staticmethod
+    def event_message_type(*_args, **_kwargs):
+        return lambda handler: handler
+
+    @staticmethod
+    def command_group(*_args, **_kwargs):
+        def decorator(handler):
+            handler.command = lambda *_a, **_kw: lambda command: command
+            return handler
+
+        return decorator
+
+
+class _MockStar:
+    def __init__(self, context):
+        self.context = context
+
+
 def _create_mock_astrbot_modules():
     if "astrbot.api" in sys.modules:
         return
@@ -29,11 +54,11 @@ def _create_mock_astrbot_modules():
     api.logger = MagicMock()
     api.AstrBotConfig = MagicMock
 
-    api_event.filter = MagicMock()
+    api_event.filter = _MockFilter()
     api_event.AstrMessageEvent = MagicMock
 
     api_star.Context = MagicMock
-    api_star.Star = MagicMock
+    api_star.Star = _MockStar
     api_star.register = lambda **kwargs: lambda cls: cls
 
     core_platform_mt.MessageType = _MockMessageType

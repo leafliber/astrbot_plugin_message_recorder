@@ -186,15 +186,25 @@ class MessageRecorder(Star):
         if not self._check_initialized():
             return
 
-        task = asyncio.create_task(self._save_message_async(event))
+        # AstrBot 会在事件处理结束后删除预处理阶段生成的临时媒体文件。
+        # 因此必须在 handler 返回前完成消息快照和媒体持久化；后台任务只接收
+        # 已经脱离 event 生命周期的 MessageRecord，负责数据库写入。
+        record = await self._prepare_message_record(event)
+        if record is None:
+            return
+
+        task = asyncio.create_task(self._save_message_async(record))
         self._pending_tasks.add(task)
         task.add_done_callback(self._pending_tasks.discard)
 
-    async def _save_message_async(self, event: AstrMessageEvent):
+    async def _save_message_async(self, record: MessageRecord):
         async with self._save_semaphore:
-            await self._do_save_message(event)
+            await self._save_prepared_record(record)
 
-    async def _do_save_message(self, event: AstrMessageEvent):
+    async def _prepare_message_record(
+        self, event: AstrMessageEvent
+    ) -> Optional[MessageRecord]:
+        """在事件有效期内生成独立消息快照并持久化临时媒体。"""
         logger.debug("[MessageRecorder] 收到消息事件，开始处理")
 
         try:
@@ -257,20 +267,29 @@ class MessageRecorder(Star):
                     except (TypeError, ValueError):
                         record.raw_message = str(raw_msg)
 
+            return record
+
+        except Exception as e:
+            logger.error(f"[MessageRecorder] 准备消息记录失败: {e}")
+            return None
+
+    async def _save_prepared_record(self, record: MessageRecord):
+        """后台保存已完成媒体持久化且不再依赖事件对象的消息快照。"""
+        try:
             record_id = await self._db.save_message(record)
 
             if record_id == -1:
                 return
 
             content_preview = (
-                (event.message_str[:30] + "...")
-                if event.message_str and len(event.message_str) > 30
-                else (event.message_str or "[非文本]")
+                (record.message_str[:30] + "...")
+                if record.message_str and len(record.message_str) > 30
+                else (record.message_str or "[非文本]")
             )
 
             logger.debug(
                 f"[MessageRecorder] 消息保存成功 #{record_id} | "
-                f"平台: {platform} | 类型: {record.message_type} | "
+                f"平台: {record.platform} | 类型: {record.message_type} | "
                 f"发送者: {record.sender_name or record.sender_id} | "
                 f"内容: {content_preview}"
             )

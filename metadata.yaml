@@ -1,6 +1,6 @@
 name: astrbot_plugin_message_recorder
 desc: 自动记录所有平台的聊天消息到SQLite，提供 Web 管理面板、全文搜索、数据导入导出和供其他插件调用的查询 API
-version: 0.0.3
+version: 0.0.4
 author: Leafiber
 repo: https://github.com/leafliber/astrbot_plugin_message_recorder
 display_name: 全平台消息记录器
